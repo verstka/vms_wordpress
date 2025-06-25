@@ -97,6 +97,124 @@ function vms_register_routes() {
 }
 
 /**
+ * Open the VMS editor session.
+ */
+function vms_editor_open() {
+    if (! current_user_can('edit_posts')) {
+        wp_die(__('Permission denied', 'verstka-backend'));
+    }
+    $post_id = isset($_GET['post']) ? intval($_GET['post']) : 0;
+    $mode    = isset($_GET['mode']) && in_array($_GET['mode'], array('desktop','mobile'), true)
+               ? sanitize_key($_GET['mode'])
+               : 'desktop';
+    $post = get_post($post_id);
+    if (! $post) {
+        wp_die(__('Invalid post ID', 'verstka-backend'));
+    }
+
+    // Prepare API request to VMS Editor
+    $api_key = get_option('vms_api_key');
+    if (empty($api_key)) {
+        echo '<script>window.onload=function(){alert('.json_encode(__('API Key not set', 'verstka-backend')).');history.back();};</script>';
+        return;
+    }
+    $endpoint = 'https://verstka.org/1/open';
+    // Send x-www-form-urlencoded request via Requests library
+    if ( ! class_exists( '\WpOrg\Requests\Requests' ) ) {
+        require_once ABSPATH . WPINC . '/Requests/Requests.php';
+        \WpOrg\Requests\Requests::register_autoloader();
+    }
+    $user_id      = get_current_user_id();
+    $material_id  = $post_id;
+    // Set html_body based on mode: desktop uses post_vms_content, mobile uses post_vms_content_mobile
+    if ( 'desktop' === $mode ) {
+        $html_body = get_post_meta( $post_id, 'post_vms_content', true );
+        $post_width = get_option('vms_desktop_width');
+    } else {
+        $html_body = get_post_meta( $post_id, 'post_vms_content_mobile', true );
+        $post_width = get_option('vms_mobile_width');
+    }
+    $host_name    = parse_url( home_url(), PHP_URL_HOST );
+    // Custom fields: example additional data
+    $custom_fields = array(
+        'mobile'        => $mode === 'mobile' ? 'M' : '',
+    );
+
+    $vms_fonts_css_url = get_option('vms_fonts_css_url');
+    if (!empty($vms_fonts_css_url)) {
+        $custom_fields['fonts.css'] = $vms_fonts_css_url;
+    }
+
+    $user               = wp_get_current_user();
+    $auth_user_email    = ! empty( $user->user_email ) ? $user->user_email : '';
+    if (!empty($auth_user_email)) {
+        $custom_fields['auth_user_email'] = $auth_user_email;
+    }
+    
+    if (!empty($post_width)) {
+        $custom_fields['width'] = $post_width;
+    }
+
+    $vms_site_httpauth_user = get_option('vms_site_httpauth_user');
+    if (!empty($vms_site_httpauth_user)) {
+        $custom_fields['auth_user'] = $vms_site_httpauth_user;
+    }
+
+    $vms_site_httpauth_pw = get_option('vms_site_httpauth_pw');
+    if (!empty($vms_site_httpauth_pw)) {
+        $custom_fields['auth_pw'] = $vms_site_httpauth_pw;
+    }
+    
+    $callback_url  = rest_url( 'verstka/v1/callback' );
+    $secret = get_option('vms_secret');
+    if ( empty( $secret ) ) {
+        echo '<script>window.onload=function(){alert(' . json_encode( __( 'Secret not set', 'verstka-backend' ) ) . ');history.back();};</script>';
+        return;
+    }
+    
+    $form_fields = array(
+        'user_id'      => $user_id,
+        'material_id'  => $material_id,
+        'html_body'    => $html_body,
+        'host_name'    => $host_name,
+        'api-key'      => $api_key,
+        'custom_fields'=> json_encode( $custom_fields ),
+        'callback_url' => $callback_url,
+        'callback_sign'=> $callback_sign,
+    );
+
+    $form_fields['callback_sign'] = getRequestSalt($secret, $form_fields, 'api-key, material_id, user_id, callback_url');
+
+    $options = array(
+        'timeout'     => 90,
+        'data_format' => 'body',
+    );
+
+    try {
+        $res = \WpOrg\Requests\Requests::post( $endpoint, array(), $form_fields, $options );
+    } catch ( \Exception $e ) {
+        echo '<script>window.onload=function(){alert(' . json_encode( $e->getMessage() ) . ');history.back();};</script>';
+        return;
+    }
+    $code = $res->status_code;
+    if ( $code !== 200 ) {
+        $message = sprintf('%s '. __( 'HTTP error: %d', 'verstka-backend' ), $endpoint,$code );
+        echo '<script>window.onload=function(){alert(' . json_encode( $message ) . ');history.back();};</script>';
+        return;
+    }
+    $data = json_decode( $res->body, true );
+
+    if (empty($data['rc']) || empty($data['data']['edit_url'])) {
+        $message = !empty($data['rm']) ? $data['rm'] : __('Unknown error', 'verstka-backend');
+        echo "<script>window.onload=function(){alert('".$message."'); var responseData = ".json_encode($data, JSON_PRETTY_PRINT).";  console.log(responseData);};</script>";
+        wp_die('<pre>'.json_encode($data, JSON_PRETTY_PRINT).'</pre>');
+    }
+    
+    $redirect = sprintf('window.location.replace("%s");', $data['data']['edit_url']);
+    wp_die("<script>{$redirect}</script>");
+}
+
+/**
  * Callback for verstka API v1.
  *
  * @param \WP_REST_Request $request Request object.
@@ -135,23 +253,23 @@ function vms_verstka_callback( WP_REST_Request $request ) {
 //     }
 // }
 
-// /**
-//  * @param string $secret
-//  * @param array  $data
-//  * @param string $fields
-//  *
-//  * @return string
-//  */
-// function getRequestSalt(string $secret, array $data, string $fields): string
-//     {
-//         $fields = array_filter(array_map('trim', explode(',', $fields)));
-//         $result = $secret;
-//         foreach ($fields as $field) {
-//             $result .= $data[$field];
-//         }
+/**
+ * @param string $secret
+ * @param array  $data
+ * @param string $fields
+ *
+ * @return string
+ */
+function getRequestSalt(string $secret, array $data, string $fields): string
+{
+    $fields = array_filter(array_map('trim', explode(',', $fields)));
+    $result = $secret;
+    foreach ($fields as $field) {
+        $result .= $data[$field];
+    }
 
-//         return md5($result);
-//     }
+    return md5($result);
+}
 
 // Add settings page and register plugin settings
 add_action('admin_menu', 'vms_add_admin_menu');
@@ -181,6 +299,7 @@ function vms_register_settings() {
     register_setting('vms_settings_group', 'vms_images_source', array('sanitize_callback' => 'sanitize_text_field'));
     register_setting('vms_settings_group', 'vms_images_dir', array('sanitize_callback' => 'sanitize_text_field'));
     register_setting('vms_settings_group', 'vms_dev_mode', array('sanitize_callback' => 'vms_sanitize_dev_mode'));
+    register_setting('vms_settings_group', 'vms_secret', array('sanitize_callback' => 'sanitize_text_field'));
 
     add_settings_section(
         'vms_main_section',
@@ -193,6 +312,13 @@ function vms_register_settings() {
         'vms_api_key',
         __('API Key', 'verstka-backend'),
         'vms_render_api_key_field',
+        'verstka-backend-settings',
+        'vms_main_section'
+    );
+    add_settings_field(
+        'vms_secret',
+        __('Secret', 'verstka-backend'),
+        'vms_render_secret_field',
         'verstka-backend-settings',
         'vms_main_section'
     );
@@ -217,6 +343,7 @@ function vms_register_settings() {
         'verstka-backend-settings',
         'vms_main_section'
     );
+
 }
 
 /**
@@ -255,6 +382,20 @@ function vms_render_api_key_field() {
     $saved_key = get_option('vms_api_key');
     $disabled  = $saved_key ? 'disabled' : '';
     printf('<input type="text" name="vms_api_key" value="%s" class="regular-text" %s />', esc_attr($val), $disabled);
+}
+
+/**
+ * Render Secret field.
+ */
+function vms_render_secret_field() {
+    $val      = get_option('vms_secret', '');
+    $saved_key = get_option('vms_api_key');
+    $disabled = $saved_key ? 'disabled' : '';
+    printf(
+        '<input type="password" name="vms_secret" value="%s" class="regular-text" %s />',
+        esc_attr($val),
+        $disabled
+    );
 }
 
 /**
@@ -311,6 +452,7 @@ function vms_reset_api_key_callback() {
     check_admin_referer('vms_reset_api_key_action', 'vms_reset_api_key_nonce');
     // Reset API key and related settings
     delete_option('vms_api_key');
+    delete_option('vms_secret');
     delete_option('vms_images_source');
     delete_option('vms_images_dir');
     wp_redirect(admin_url('options-general.php?page=verstka-backend-settings'));
@@ -377,4 +519,113 @@ function vms_admin_inline_styles() {
         }
     </style>
     <?php
+}
+
+// Add "Is VMS" column to posts list
+add_filter('manage_post_posts_columns', 'vms_add_isvms_column');
+add_action('manage_post_posts_custom_column', 'vms_render_isvms_column', 10, 2);
+
+/**
+ * Add "Is VMS" column before the title in posts list.
+ *
+ * @param array $columns Existing columns.
+ * @return array Modified columns.
+ */
+function vms_add_isvms_column($columns) {
+    $new_columns = array();
+    foreach ($columns as $key => $label) {
+        if ('cb' === $key) {
+            $new_columns[$key] = $label;
+            $new_columns['is_vms'] = __('Ѵ', 'verstka-backend');
+        } else {
+            $new_columns[$key] = $label;
+        }
+    }
+    return $new_columns;
+}
+
+/**
+ * Render content for "Is VMS" column.
+ *
+ * @param string $column Column name.
+ * @param int    $post_id Post ID.
+ */
+function vms_render_isvms_column($column, $post_id) {
+    if ('is_vms' !== $column) {
+        return;
+    }
+    global $wpdb;
+    $is_vms = $wpdb->get_var(
+        $wpdb->prepare("SELECT post_isvms FROM {$wpdb->posts} WHERE ID = %d", $post_id)
+    );
+    echo '<input type="checkbox" disabled ' . checked(1, $is_vms, false) . ' />';
+}
+
+// Add inline CSS to shrink Is VMS column width in posts list.
+add_action('admin_head-edit.php', 'vms_admin_list_inline_styles');
+/**
+ * Output inline styles for Is VMS column in posts list table.
+ */
+function vms_admin_list_inline_styles() {
+    ?>
+    <style>
+        th.column-is_vms, td.column-is_vms {
+            width: 10px !important;
+            padding: 0 4px;
+            text-align: center;
+            margin: 0 0 0 8px;
+        }
+    </style>
+    <?php
+}
+
+// Register hidden editor page for Verstka
+add_action('admin_menu', 'vms_add_editor_page');
+/**
+ * Register a hidden admin page to render VMS editor.
+ */
+function vms_add_editor_page() {
+    add_submenu_page(
+        null,
+        __('VMS Editor', 'verstka-backend'),
+        __('VMS Editor', 'verstka-backend'),
+        'edit_posts',
+        'vms-editor',
+        'vms_editor_open'
+    );
+}
+
+// Add custom row actions for Verstka editing
+add_filter('post_row_actions', 'vms_add_row_actions', 10, 2);
+/**
+ * Add "Редактировать в Verstka Desktop" and "Редактировать в Mobile" links to post row actions.
+ *
+ * @param array   $actions Existing action links.
+ * @param WP_Post $post    Current post object.
+ * @return array Modified action links.
+ */
+function vms_add_row_actions($actions, $post) {
+    if ('post' === $post->post_type) {
+        // URL for desktop editing via hidden vms-editor page
+        $desktop_url = add_query_arg(
+            array('page' => 'vms-editor', 'mode' => 'desktop', 'post' => $post->ID),
+            admin_url('admin.php')
+        );
+        // URL for mobile editing via hidden vms-editor page
+        $mobile_url  = add_query_arg(
+            array('page' => 'vms-editor', 'mode' => 'mobile', 'post' => $post->ID),
+            admin_url('admin.php')
+        );
+        $actions['vms_edit_desktop'] = sprintf(
+            '<a href="%s">%s</a>',
+            esc_url($desktop_url),
+            __('Редактировать в Verstka Desktop', 'verstka-backend')
+        );
+        $actions['vms_edit_mobile'] = sprintf(
+            '<a href="%s">%s</a>',
+            esc_url($mobile_url),
+            __('Mobile', 'verstka-backend')
+        );
+    }
+    return $actions;
 }
