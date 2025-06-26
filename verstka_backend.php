@@ -126,12 +126,12 @@ function vms_editor_open() {
     }
     $user_id      = get_current_user_id();
     $material_id  = $post_id;
-    // Set html_body based on mode: desktop uses post_vms_content, mobile uses post_vms_content_mobile
+    // Set html_body based on mode using actual table columns
     if ( 'desktop' === $mode ) {
-        $html_body = get_post_meta( $post_id, 'post_vms_content', true );
+        $html_body = isset( $post->post_vms_content ) ? $post->post_vms_content : '';
         $post_width = get_option('vms_desktop_width');
     } else {
-        $html_body = get_post_meta( $post_id, 'post_vms_content_mobile', true );
+        $html_body = isset( $post->post_vms_content_mobile ) ? $post->post_vms_content_mobile : '';
         $post_width = get_option('vms_mobile_width');
     }
     $host_name    = parse_url( home_url(), PHP_URL_HOST );
@@ -221,9 +221,19 @@ function vms_editor_open() {
  * @return \WP_REST_Response
  */
 function vms_verstka_callback( WP_REST_Request $request ) {
+    // Инициализируем массив запросов
+    $requests = [];
     // Получаем параметры запроса: сначала JSON, затем тело формы
     $data = $request->get_body_params();
     $is_debug = get_option('vms_dev_mode', 0);
+
+    $expected_callback_sign = getRequestSalt($secret, $data, 'session_id, user_id, material_id, download_url');  
+    if ( $expected_callback_sign !== $data['callback_sign'] ) {
+        if ( $is_debug ) {
+            return formJSON( 0, 'Invalid callback sign', array('expected_callback_sign' => $expected_callback_sign, 'data' => $data));
+        }
+        return formJSON( 0, 'Invalid callback sign');
+    }
 
     // Распаковываем JSON в custom_fields, если он есть
     if ( ! empty( $data['custom_fields'] ) ) {
@@ -257,7 +267,42 @@ function vms_verstka_callback( WP_REST_Request $request ) {
     $uploadMaterialPathAdding = sprintf(($is_mobile ? '%sm' : '%s'), $data['material_id']);
     $images_rel = trailingslashit(sprintf('%s%s', trailingslashit($images_dir), $uploadMaterialPathAdding));
     $images_abs = wp_normalize_path(trailingslashit(ABSPATH . $images_rel));
-    
+
+    if (!isset($data['post_id'])) {
+        return formJSON( 0, 'post_id not set');
+    }
+
+    if (!isset($data['html_body'])) {
+        return formJSON( 0, 'html_body not set');
+    }
+
+    // Получаем список файлов по download_url (JSON)
+    $download_endpoint = str_replace('http://', 'https://', $data['download_url']);
+    // Подключаем и регистрируем автозагрузчик Requests
+    if ( ! class_exists( '\WpOrg\Requests\Requests' ) ) {
+        require_once ABSPATH . WPINC . '/Requests/Requests.php';
+        \WpOrg\Requests\Requests::register_autoloader();
+    }
+    // Запрашиваем JSON со списком файлов
+    try {
+        $list_res = \WpOrg\Requests\Requests::get(
+            $download_endpoint,
+            [],
+            [],
+            ['timeout' => 60, 'data_format' => 'body']
+        );
+    } catch (\Exception $e) {
+        return formJSON(0, 'File list request failed: ' . $e->getMessage());
+    }
+    if ($list_res->status_code !== 200) {
+        return formJSON(0, sprintf('File list HTTP error: %d', $list_res->status_code));
+    }
+    $list_data = json_decode($list_res->body, true);
+    if (empty($list_data['data']) || !is_array($list_data['data'])) {
+        return formJSON(0, 'Invalid file list JSON', $list_data);
+    }
+    $images_list = $list_data['data'];
+
     wp_mkdir_p($images_abs);
     if (!wp_is_writable($images_abs)) {
         if ( $is_debug ) {
@@ -266,69 +311,61 @@ function vms_verstka_callback( WP_REST_Request $request ) {
         return formJSON( 0, 'Images Directory not writable');
     }
 
-    $expected_callback_sign = getRequestSalt($secret, $data, 'session_id, user_id, material_id, download_url');  
-    if ( $expected_callback_sign !== $data['callback_sign'] ) {
-        if ( $is_debug ) {
-            return formJSON( 0, 'Invalid callback sign', array('expected_callback_sign' => $expected_callback_sign, 'data' => $data));
+    // Формируем массив URL для скачивания
+    if ( isset($list_data['data']) && is_array($list_data['data']) ) {
+        foreach ($list_data['data'] as $image) {
+            $requests[$image] = [
+                'url'     => sprintf('%s/%s', $download_endpoint, $image),
+                'type'    => 'GET',
+                'options' => [
+                    'timeout'         => 60,
+                    'connect_timeout' => 3.14,
+                    'useragent'       => 'verstka wordpress 1.2',
+                    'stream'          => true,
+                    'filename'        => trailingslashit($images_abs) . basename($image),
+                ],
+            ];
         }
-        return formJSON( 0, 'Invalid callback sign');
     }
 
-    // Получаем список файлов по download_url (JSON)
-    $download_endpoint = str_replace('http://', 'https://', $data['download_url']);
-    if ( ! class_exists( '\WpOrg\Requests\Requests' ) ) {
-        require_once ABSPATH . WPINC . '/Requests/Requests.php';
-        \WpOrg\Requests\Requests::register_autoloader();
-    }
-
+    // Выполняем параллельные запросы и замеряем время
     $start_time = microtime(true);
-    try {
-        $list_res = \WpOrg\Requests\Requests::get(
-            $download_endpoint,
-            array(),
-            array(),
-            array( 'timeout' => 60, 'data_format' => 'body' )
-        );
-    } catch ( \Exception $e ) {
-        return formJSON( 0, 'File list request failed: ' . $e->getMessage());
-    }
-    if ( $list_res->status_code !== 200 ) {
-        return formJSON( 0, sprintf( 'File list HTTP error: %d', $list_res->status_code ) );
-    }
-    $list_data = json_decode( $list_res->body, true );
-    if ( ! is_array( $list_data ) || ! isset( $list_data['data'] ) ) {
-        return formJSON( 0, 'Invalid file list JSON', $list_data );
-    }
-    $images_list = $list_data['data'];
-    $requests = [];
-    foreach ( $images_list as $image ) {
-        $requests[$image] = [
-        'url' => sprintf('%s/%s', $download_endpoint, $image),
-        'type' => 'GET',
-        'options' => [
-            'timeout' => 60,
-            'connect_timeout' => 3.14,
-            'useragent' => 'verstka wordpress 1.2',
-            'stream' => true,
-            'filename' => trailingslashit($images_abs ). basename($image),
-        ]
-        ];
-    }
     $results = \WpOrg\Requests\Requests::request_multiple($requests);
     foreach ( $results as $result ) {
         if ( $result->status_code !== 200 ) {
-            return formJSON( 0, sprintf( 'Download HTTP error: %d', $result->status_code ) );
+            return formJSON( 0, sprintf( 'Download %s HTTP error: %d', $result->url, $result->status_code ) );
         }
     }
 
-    // Возвращаем информацию по всем файлам
+    $source = str_replace('/vms_images/', sprintf('%s/', $images_rel), $data['html_body']);
+
+    if ( $is_mobile ) {
+        update_post_meta( $data['post_id'], 'post_vms_content_mobile', $source );
+    } else {
+        update_post_meta( $data['post_id'], 'post_vms_content', $source);
+    }
+    // Устанавливаем флаг VMS
+    global $wpdb;
+    $wpdb->update(
+        $wpdb->posts,
+        array('post_isvms' => 1),
+        array('ID' => $data['post_id'])
+    );
+    // Сбросим кэш поста
+    clean_post_cache( $data['post_id'] );
+
+    // Формируем метрики: суммарное и реальное время
+    $time_real = microtime(true) - $start_time;
+    if ( $is_debug ) {
+        return formJSON( 1, 'Success', array(
+            'images_list' => $images_list,
+            'time_real'   => $time_real,
+            'results'     => $results,
+            'data'        => $data,
+        ) );
+    }
     return formJSON( 1, 'Success', array(
-        'images_abs' => $images_abs,
-        'images_rel' => $images_rel,
-        'images_list'  => $images_list,
-        'data'       => $data,
-        'results'    => $results,
-        'time'       => microtime(true) - $start_time,
+        'time_real'   => $time_real,
     ) );
 }
 
