@@ -72,7 +72,7 @@ add_action('init', 'vms_init');
  * Enqueue front-end scripts and styles
  */
 function vms_enqueue_assets() {
-    $version = '1.0.0';
+    $version = '1.2.0';
     wp_enqueue_style('vms-style', plugin_dir_url(__FILE__) . 'assets/css/vms_wordpress.css', array(), $version);
     wp_enqueue_script('vms-script', plugin_dir_url(__FILE__) . 'assets/js/vms_plugin.js', array('jquery'), $version, true);
 }
@@ -103,11 +103,12 @@ function vms_editor_open() {
     if (! current_user_can('edit_posts')) {
         wp_die(__('Permission denied', 'verstka-backend'));
     }
-    $post_id = isset($_GET['post']) ? intval($_GET['post']) : 0;
+    $user_id      = get_current_user_id();
+    $material_id = isset($_GET['post']) ? intval($_GET['post']) : 0;
     $mode    = isset($_GET['mode']) && in_array($_GET['mode'], array('desktop','mobile'), true)
                ? sanitize_key($_GET['mode'])
                : 'desktop';
-    $post = get_post($post_id);
+    $post = get_post($material_id);
     if (! $post) {
         wp_die(__('Invalid post ID', 'verstka-backend'));
     }
@@ -124,8 +125,7 @@ function vms_editor_open() {
         require_once ABSPATH . WPINC . '/Requests/Requests.php';
         \WpOrg\Requests\Requests::register_autoloader();
     }
-    $user_id      = get_current_user_id();
-    $material_id  = $post_id;
+
     // Set html_body based on mode using actual table columns
     if ( 'desktop' === $mode ) {
         $html_body = isset( $post->post_vms_content ) ? $post->post_vms_content : '';
@@ -227,6 +227,16 @@ function vms_verstka_callback( WP_REST_Request $request ) {
     $data = $request->get_body_params();
     $is_debug = get_option('vms_dev_mode', 0);
 
+    $api_key = get_option('vms_api_key');
+    if (empty( $api_key ) ) {
+        return formJSON( 0, 'API Key not set');
+    }
+
+    $secret = get_option('vms_secret');
+    if (empty( $secret ) ) {
+        return formJSON( 0, 'Secret not set');
+    }
+
     $expected_callback_sign = getRequestSalt($secret, $data, 'session_id, user_id, material_id, download_url');  
     if ( $expected_callback_sign !== $data['callback_sign'] ) {
         if ( $is_debug ) {
@@ -250,16 +260,6 @@ function vms_verstka_callback( WP_REST_Request $request ) {
 
     $is_mobile = !empty($data['custom_fields']['mobile']);
 
-    $api_key = get_option('vms_api_key');
-    if (empty( $api_key ) ) {
-        return formJSON( 0, 'API Key not set');
-    }
-
-    $secret = get_option('vms_secret');
-    if (empty( $secret ) ) {
-        return formJSON( 0, 'Secret not set');
-    }
-
     $images_dir = get_option('vms_images_dir');
     if ( empty( $images_dir ) ) {
         return formJSON( 0, 'Images Directory not set');
@@ -268,8 +268,8 @@ function vms_verstka_callback( WP_REST_Request $request ) {
     $images_rel = trailingslashit(sprintf('%s%s', trailingslashit($images_dir), $uploadMaterialPathAdding));
     $images_abs = wp_normalize_path(trailingslashit(ABSPATH . $images_rel));
 
-    if (!isset($data['post_id'])) {
-        return formJSON( 0, 'post_id not set');
+    if (!isset($data['material_id'])) {
+        return formJSON( 0, 'material_id not set');
     }
 
     if (!isset($data['html_body'])) {
@@ -339,20 +339,25 @@ function vms_verstka_callback( WP_REST_Request $request ) {
 
     $source = str_replace('/vms_images/', sprintf('%s/', $images_rel), $data['html_body']);
 
+
+    $db_data = ['post_isvms' => 1];
     if ( $is_mobile ) {
-        update_post_meta( $data['post_id'], 'post_vms_content_mobile', $source );
+        $db_data['post_vms_content_mobile'] = $source;
     } else {
-        update_post_meta( $data['post_id'], 'post_vms_content', $source);
+        $db_data['post_vms_content'] = $source;
     }
     // Устанавливаем флаг VMS
     global $wpdb;
     $wpdb->update(
         $wpdb->posts,
-        array('post_isvms' => 1),
-        array('ID' => $data['post_id'])
+        $db_data,
+        array('ID' => $data['material_id'])
     );
     // Сбросим кэш поста
-    clean_post_cache( $data['post_id'] );
+    clean_post_cache( $data['material_id'] );
+    if (function_exists('wp_cache_clear_cache')) {
+        wp_cache_clear_cache();
+    }
 
     // Формируем метрики: суммарное и реальное время
     $time_real = microtime(true) - $start_time;
@@ -592,15 +597,22 @@ function vms_reset_api_key_callback() {
  * @param string $hook The current admin page.
  */
 function vms_enqueue_admin_assets($hook) {
-    if ($hook !== 'settings_page_verstka-backend-settings') {
-        return;
-    }
     $version = '1.0.0';
-    wp_enqueue_script('vms-admin-script', plugin_dir_url(__FILE__) . 'assets/js/vms_settings.js', array('jquery'), $version, true);
-    wp_localize_script('vms-admin-script', 'vmsSettings', array(
-        'ajaxUrl' => admin_url('admin-ajax.php'),
-        'nonce'   => wp_create_nonce('vms_dev_mode_nonce'),
-    ));
+    // Settings page scripts
+    if ($hook === 'settings_page_verstka-backend-settings') {
+        wp_enqueue_script('vms-admin-script', plugin_dir_url(__FILE__) . 'assets/js/vms_settings.js', array('jquery'), $version, true);
+        wp_localize_script('vms-admin-script', 'vmsSettings', array(
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+            'nonce'   => wp_create_nonce('vms_dev_mode_nonce'),
+        ));
+    }
+    // Posts list toggle script
+    if ($hook === 'edit.php') {
+        wp_enqueue_script('vms-toggle-script', plugin_dir_url(__FILE__) . 'assets/js/vms_toggle.js', array('jquery'), '1.0.0', true);
+        wp_localize_script('vms-toggle-script', 'vmsToggle', array(
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+        ));
+    }
 }
 
 /**
@@ -628,82 +640,48 @@ function vms_toggle_dev_mode_callback() {
     ));
 }
 
-// Inline CSS to reduce vertical spacing on settings page
-add_action('admin_head-settings_page_verstka-backend-settings', 'vms_admin_inline_styles');
-/**
- * Output inline styles for settings page to reduce vertical spacing.
- */
-function vms_admin_inline_styles() {
-    ?>
-    <style>
-        /* Reduce spacing above and below section headers */
-        body.settings_page_verstka-backend-settings h2 {
-            margin: 0.5em 0 0.2em;
+/*
+    Добавляет в список статей колонку Ѵ признак что это cтатья из verstka
+*/
+add_filter('manage_edit-post_columns', 'add_is_vms_column', 4);
+function add_is_vms_column($columns)
+{
+    $result = [];
+    foreach ($columns as $name => $value) {
+        if ($name == 'title') {
+            $result['is_vms'] = 'Ѵ';
         }
-        /* Reduce spacing after settings tables */
-        body.settings_page_verstka-backend-settings .form-table {
-            margin-bottom: 0.5em;
-        }
-    </style>
-    <?php
-}
-
-// Add "Is VMS" column to posts list
-add_filter('manage_post_posts_columns', 'vms_add_isvms_column');
-add_action('manage_post_posts_custom_column', 'vms_render_isvms_column', 10, 2);
-
-/**
- * Add "Is VMS" column before the title in posts list.
- *
- * @param array $columns Existing columns.
- * @return array Modified columns.
- */
-function vms_add_isvms_column($columns) {
-    $new_columns = array();
-    foreach ($columns as $key => $label) {
-        if ('cb' === $key) {
-            $new_columns[$key] = $label;
-            $new_columns['is_vms'] = __('Ѵ', 'verstka-backend');
-        } else {
-            $new_columns[$key] = $label;
-        }
+        $result[$name] = $value;
     }
-    return $new_columns;
+
+    return $result;
 }
 
-/**
- * Render content for "Is VMS" column.
- *
- * @param string $column Column name.
- * @param int    $post_id Post ID.
- */
-function vms_render_isvms_column($column, $post_id) {
-    if ('is_vms' !== $column) {
+/*
+   Отображает закрашенную звездочку в колонке Ѵ если это статья из verstka
+*/
+add_filter('manage_post_posts_custom_column', 'fill_is_vms_column', 5, 2); // wp-admin/includes/class-wp-posts-list-table.php
+function fill_is_vms_column($column_name, $post_id) {
+    if ('is_vms' !== $column_name) {
         return;
     }
-    global $wpdb;
-    $is_vms = $wpdb->get_var(
-        $wpdb->prepare("SELECT post_isvms FROM {$wpdb->posts} WHERE ID = %d", $post_id)
+    $post = get_post($post_id);
+    // Clickable star to toggle VMS flag
+    $star = $post->post_isvms == 1 ? '&#9733;' : '&#9734;';
+    $nonce = wp_create_nonce('vms_toggle_vms');
+    printf(
+        '<a href="#" class="vms-toggle" data-post-id="%d" data-nonce="%s" title="%s">%s</a>',
+        $post_id,
+        esc_attr($nonce),
+        esc_attr__('Toggle VMS', 'verstka-backend'),
+        $star
     );
-    echo '<input type="checkbox" disabled ' . checked(1, $is_vms, false) . ' />';
 }
 
-// Add inline CSS to shrink Is VMS column width in posts list.
-add_action('admin_head-edit.php', 'vms_admin_list_inline_styles');
-/**
- * Output inline styles for Is VMS column in posts list table.
- */
-function vms_admin_list_inline_styles() {
-    ?>
-    <style>
-        th.column-is_vms, td.column-is_vms {
-            width: 10px !important;
-            padding: 0 4px;
-            text-align: center;
-            margin: 0 0 0 8px;
-        }
-    </style>
-    <?php
+add_action('admin_head', 'add_is_vms_column_css');
+function add_is_vms_column_css()
+{
+    echo '<style type="text/css">.column-is_vms{width:3%;}</style>';
 }
 
 // Register hidden editor page for Verstka
@@ -755,4 +733,139 @@ function vms_add_row_actions($actions, $post) {
         );
     }
     return $actions;
+}
+
+/**
+ * Подменяет содержимое статьи на нужную версию контента
+ */
+add_filter('the_content', 'apply_vms_content_after', 9999);
+function apply_vms_content_after($content)
+{
+    $post = get_post();
+
+	if ($post->post_isvms != 1) { // it's not an Verstka article
+        return $content;
+	}
+
+	if (post_password_required($post)) { // in case of post password protected
+		return $content;
+	}
+
+    $mobile = empty($post->post_vms_content_mobile) ? $post->post_vms_content : $post->post_vms_content_mobile;
+
+    $desktop = base64_encode($post->post_vms_content);
+    $mobile = base64_encode($mobile);
+	
+    $content = "<div class=\"verstka-article\">{$post->post_vms_content}</div>
+		<script type=\"text/javascript\" id=\"verstka-init\">
+		window.onVMSAPIReady = function (api) {
+			api.Article.enable({
+				display_mode: 'desktop'
+			});
+
+			document.querySelectorAll('article')[0].classList.add('shown');
+		};
+
+		function decodeHtml(base64) {
+		    return decodeURIComponent(atob(base64).split('').map(function(c) {return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);}).join(''))
+        }
+
+		var htmls = {
+			desktop: decodeHtml(`{$desktop}`),
+			mobile: decodeHtml(`{$mobile}`),
+		};
+		var isMobile = false;
+		var prev = null;
+
+		function switchHtml(html) {
+			var article = document.querySelector('.verstka-article')
+
+			if (window.VMS_API) {
+				window.VMS_API.Article.disable()
+			}
+
+			article.innerHTML = html;
+
+			if (window.VMS_API) {
+				window.VMS_API.Article.enable({display_mode: 'desktop'})
+			}
+		}
+
+		function onResize() {
+			var w = document.documentElement.clientWidth;
+
+			isMobile = w < 768;
+
+			if (prev !== isMobile) {
+				prev = isMobile
+				switchHtml(htmls[isMobile ? 'mobile' : 'desktop'])
+			}
+		}
+
+		onResize()
+
+		window.onresize = onResize;
+
+	</script>
+
+	";
+
+    return $content;
+}
+
+/**
+ * Активирует отображение анимаций
+ */
+add_action('wp_head', 'add_this_script_footer');
+function add_this_script_footer()
+{
+    $is_debug = get_option('vms_dev_mode', 0); ?>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://<?php echo $is_debug ? 'dev' : 'go'; ?>.verstka.org/api.js" async type="text/javascript"></script>
+
+    <?php
+}
+
+// Сделать колонку "Ѵ" сортируемой по столбцу post_isvms
+add_filter('manage_edit-post_sortable_columns', 'verstka_sortable_vms_column');
+function verstka_sortable_vms_column($columns) {
+    $columns['is_vms'] = 'is_vms';
+    return $columns;
+}
+
+// Поддержка сортировки списка записей по post_isvms
+add_action('pre_get_posts', 'verstka_vms_orderby');
+function verstka_vms_orderby($query) {
+    if (!is_admin() || !$query->is_main_query()) {
+        return;
+    }
+    if ('is_vms' === $query->get('orderby')) {
+        $query->set('orderby', 'post_isvms');
+        $order = strtoupper($query->get('order')) === 'ASC' ? 'ASC' : 'DESC';
+        $query->set('order', $order);
+    }
+}
+
+// AJAX endpoint to toggle VMS flag
+add_action('wp_ajax_vms_toggle_vms', 'vms_ajax_toggle_vms');
+function vms_ajax_toggle_vms() {
+    check_ajax_referer('vms_toggle_vms', 'nonce');
+    if (!current_user_can('edit_posts')) {
+        wp_send_json_error(array('message' => __('Permission denied', 'verstka-backend')));
+    }
+    $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+    if (!$post_id) {
+        wp_send_json_error(array('message' => __('Invalid post ID', 'verstka-backend')));
+    }
+    global $wpdb;
+    $current = $wpdb->get_var($wpdb->prepare("SELECT post_isvms FROM {$wpdb->posts} WHERE ID = %d", $post_id));
+    $new = $current ? 0 : 1;
+    $wpdb->update(
+        $wpdb->posts,
+        array('post_isvms' => $new),
+        array('ID' => $post_id)
+    );
+    clean_post_cache($post_id);
+    wp_send_json_success(array('post_isvms' => $new));
 }
