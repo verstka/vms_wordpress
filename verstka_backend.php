@@ -938,3 +938,90 @@ function vms_add_viewport_meta() {
 
 // Support sorting by VMS flag on posts and pages
 add_action('pre_get_posts', 'verstka_vms_orderby');
+
+// Replace default edit post link with Verstka desktop/mobile buttons for VMS posts
+add_filter('edit_post_link', 'vms_replace_edit_post_link', 10, 3);
+function vms_replace_edit_post_link($link, $post_id, $text) {
+    $post = get_post($post_id);
+    if (!empty($post->post_isvms)) {
+        $desktop_url = add_query_arg(
+            array('page' => 'vms-editor', 'mode' => 'desktop', 'post' => $post_id),
+            admin_url('admin.php')
+        );
+        $mobile_url = add_query_arg(
+            array('page' => 'vms-editor', 'mode' => 'mobile', 'post' => $post_id),
+            admin_url('admin.php')
+        );
+        $desktop_label = __('Desktop', 'verstka-backend');
+        $mobile_label  = __('Mobile', 'verstka-backend');
+        return sprintf(
+            '<a href="%s" class="vms-edit-button vms-edit-desktop">%s</a> <a href="%s" class="vms-edit-button vms-edit-mobile">%s</a>',
+            esc_url($desktop_url),
+            esc_html($desktop_label),
+            esc_url($mobile_url),
+            esc_html($mobile_label)
+        );
+    }
+    return $link;
+}
+
+add_action('enqueue_block_editor_assets', 'vms_enqueue_block_editor_buttons');
+function vms_enqueue_block_editor_buttons() {
+    // Получаем ID редактируемого поста из параметра запроса
+    $post_id = isset($_GET['post']) ? intval($_GET['post']) : 0;
+    if (!$post_id) {
+        return;
+    }
+    
+    $post = get_post($post_id);
+    if (!$post || empty($post->post_isvms)) {
+        return;
+    }
+    $desktop_url = add_query_arg(
+        array('page' => 'vms-editor', 'mode' => 'desktop', 'post' => $post_id),
+        admin_url('admin.php')
+    );
+    $mobile_url = add_query_arg(
+        array('page' => 'vms-editor', 'mode' => 'mobile', 'post' => $post_id),
+        admin_url('admin.php')
+    );
+    wp_enqueue_script(
+        'vms-block-editor',
+        plugin_dir_url(__FILE__) . 'assets/js/vms_block_editor.js',
+        array('wp-plugins', 'wp-edit-post', 'wp-components', 'wp-element', 'wp-i18n'),
+        '1.0.0',
+        true
+    );
+    wp_localize_script(
+        'vms-block-editor',
+        'vmsBlockEditor',
+        array(
+            'desktopUrl' => esc_url($desktop_url),
+            'mobileUrl'  => esc_url($mobile_url),
+        )
+    );
+}
+
+add_action('media_buttons', 'vms_add_classic_editor_buttons', 11);
+function vms_add_classic_editor_buttons($editor_id) {
+    global $post;
+    if (empty($post->post_isvms)) {
+        return;
+    }
+    $desktop_url = add_query_arg(
+        array('page' => 'vms-editor', 'mode' => 'desktop', 'post' => $post->ID),
+        admin_url('admin.php')
+    );
+    $mobile_url = add_query_arg(
+        array('page' => 'vms-editor', 'mode' => 'mobile', 'post' => $post->ID),
+        admin_url('admin.php')
+    );
+    printf(
+        '<a href="%s" class="button vms-edit-desktop" target="_blank">%s</a> ',
+        esc_url($desktop_url), esc_html__('Verstka Desktop', 'verstka-backend')
+    );
+    printf(
+        '<a href="%s" class="button vms-edit-mobile" target="_blank">%s</a>',
+        esc_url($mobile_url), esc_html__('Mobile', 'verstka-backend')
+    );
+}
