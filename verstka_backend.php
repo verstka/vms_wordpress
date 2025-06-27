@@ -860,7 +860,6 @@ function apply_vms_content_after($content)
 
 // Сделать колонку "Ѵ" сортируемой по столбцу post_isvms
 add_filter('manage_edit-post_sortable_columns', 'verstka_sortable_vms_column');
-add_filter('manage_edit-page_sortable_columns', 'verstka_sortable_vms_column');
 function verstka_sortable_vms_column($columns) {
     // Make VMS column sortable by our custom orderby 'post_isvms'
     $columns['post_isvms'] = 'post_isvms';
