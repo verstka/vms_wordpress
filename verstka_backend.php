@@ -679,30 +679,43 @@ function vms_toggle_dev_mode_callback() {
 /*
     Добавляет в список статей колонку Ѵ признак что это cтатья из verstka
 */
-add_filter('manage_edit-post_columns', 'add_is_vms_column', 4);
-function add_is_vms_column($columns)
-{
+add_filter('manage_edit-post_columns', 'add_post_isvms_column', 4);
+add_filter('manage_edit-page_columns', 'add_post_isvms_column', 4);
+
+/**
+ * Add VMS column for posts and pages.
+ *
+ * @param array $columns Columns list.
+ * @return array Modified columns with VMS flag.
+ */
+function add_post_isvms_column($columns) {
     $result = [];
     foreach ($columns as $name => $value) {
-        if ($name == 'title') {
-            $result['is_vms'] = 'Ѵ';
+        if ('title' === $name) {
+            $result['post_isvms'] = 'Ѵ';
         }
         $result[$name] = $value;
     }
-
     return $result;
 }
 
 /*
    Отображает закрашенную звездочку в колонке Ѵ если это статья из verstka
 */
-add_filter('manage_post_posts_custom_column', 'fill_is_vms_column', 5, 2); // wp-admin/includes/class-wp-posts-list-table.php
-function fill_is_vms_column($column_name, $post_id) {
-    if ('is_vms' !== $column_name) {
+add_filter('manage_post_posts_custom_column', 'fill_post_isvms_column', 5, 2);
+add_filter('manage_page_posts_custom_column', 'fill_post_isvms_column', 5, 2);
+
+/**
+ * Render VMS toggle star in column for posts and pages.
+ *
+ * @param string $column_name Column name.
+ * @param int $post_id Post ID.
+ */
+function fill_post_isvms_column($column_name, $post_id) {
+    if ('post_isvms' !== $column_name) {
         return;
     }
     $post = get_post($post_id);
-    // Clickable star to toggle VMS flag
     $star = $post->post_isvms == 1 ? '&#9733;' : '&#9734;';
     $nonce = wp_create_nonce('vms_toggle_vms');
     printf(
@@ -714,10 +727,10 @@ function fill_is_vms_column($column_name, $post_id) {
     );
 }
 
-add_action('admin_head', 'add_is_vms_column_css');
-function add_is_vms_column_css()
+add_action('admin_head', 'add_post_isvms_column_css');
+function add_post_isvms_column_css()
 {
-    echo '<style type="text/css">.column-is_vms{width:3%;}</style>';
+    echo '<style type="text/css">.column-post_isvms{width:3%;}</style>';
 }
 
 // Register hidden editor page for Verstka
@@ -738,15 +751,13 @@ function vms_add_editor_page() {
 
 // Add custom row actions for Verstka editing
 add_filter('post_row_actions', 'vms_add_row_actions', 10, 2);
+// Also add actions for pages
+add_filter('page_row_actions', 'vms_add_row_actions', 10, 2);
 /**
  * Add "Редактировать в Verstka Desktop" and "Редактировать в Mobile" links to post row actions.
- *
- * @param array   $actions Existing action links.
- * @param WP_Post $post    Current post object.
- * @return array Modified action links.
  */
 function vms_add_row_actions($actions, $post) {
-    if ('post' === $post->post_type) {
+    if ( in_array($post->post_type, array('post','page'), true) ) {
         // URL for desktop editing via hidden vms-editor page
         $desktop_url = add_query_arg(
             array('page' => 'vms-editor', 'mode' => 'desktop', 'post' => $post->ID),
@@ -849,22 +860,36 @@ function apply_vms_content_after($content)
 
 // Сделать колонку "Ѵ" сортируемой по столбцу post_isvms
 add_filter('manage_edit-post_sortable_columns', 'verstka_sortable_vms_column');
+add_filter('manage_edit-page_sortable_columns', 'verstka_sortable_vms_column');
 function verstka_sortable_vms_column($columns) {
-    $columns['is_vms'] = 'is_vms';
+    // Make VMS column sortable by our custom orderby 'post_isvms'
+    $columns['post_isvms'] = 'post_isvms';
     return $columns;
 }
 
-// Поддержка сортировки списка записей по post_isvms
-add_action('pre_get_posts', 'verstka_vms_orderby');
+/**
+ * Apply sorting by VMS flag on posts and pages list.
+ *
+ * @param WP_Query $query The current query object.
+ */
 function verstka_vms_orderby($query) {
-    if (!is_admin() || !$query->is_main_query()) {
+    // Only modify admin queries
+    if (! is_admin()) {
         return;
     }
-    if ('is_vms' === $query->get('orderby')) {
-        $query->set('orderby', 'post_isvms');
-        $order = strtoupper($query->get('order')) === 'ASC' ? 'ASC' : 'DESC';
-        $query->set('order', $order);
+    // Only apply when ordering by our VMS column
+    if ('post_isvms' !== $query->get('orderby')) {
+        return;
     }
+    // Ensure for posts or pages lists
+    $post_type = $query->get('post_type');
+    if (! in_array($post_type, array('post', 'page'), true)) {
+        return;
+    }
+    // Set custom orderby
+    $query->set('orderby', 'post_isvms');
+    $order = strtoupper($query->get('order')) === 'ASC' ? 'ASC' : 'DESC';
+    $query->set('order', $order);
 }
 
 // AJAX endpoint to toggle VMS flag
@@ -911,3 +936,6 @@ function vms_add_viewport_meta() {
         }
     }
 }
+
+// Support sorting by VMS flag on posts and pages
+add_action('pre_get_posts', 'verstka_vms_orderby');
