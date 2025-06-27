@@ -333,6 +333,9 @@ function vms_verstka_callback( WP_REST_Request $request ) {
     $results = \WpOrg\Requests\Requests::request_multiple($requests);
     foreach ( $results as $result ) {
         if ( $result->status_code !== 200 ) {
+            if ( $is_debug ) {
+                return formJSON( 0, sprintf( 'Download %s HTTP error: %d', $result->url, $result->status_code ), $result);
+            }
             return formJSON( 0, sprintf( 'Download %s HTTP error: %d', $result->url, $result->status_code ) );
         }
     }
@@ -724,12 +727,12 @@ function vms_add_row_actions($actions, $post) {
         $actions['vms_edit_desktop'] = sprintf(
             '<a href="%s">%s</a>',
             esc_url($desktop_url),
-            __('Редактировать в Verstka Desktop', 'verstka-backend')
+            'Verstka [ D'
         );
         $actions['vms_edit_mobile'] = sprintf(
             '<a href="%s">%s</a>',
             esc_url($mobile_url),
-            __('Mobile', 'verstka-backend')
+            'M ]'
         );
     }
     return $actions;
@@ -806,25 +809,9 @@ function apply_vms_content_after($content)
 
 		window.onresize = onResize;
 
-	</script>
-
-	";
+	</script>";
 
     return $content;
-}
-
-/**
- * Активирует отображение анимаций
- */
-add_action('wp_head', 'add_this_script_footer');
-function add_this_script_footer()
-{
-    $is_debug = get_option('vms_dev_mode', 0); ?>
-
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <script src="https://<?php echo $is_debug ? 'dev' : 'go'; ?>.verstka.org/api.js" async type="text/javascript"></script>
-
-    <?php
 }
 
 // Сделать колонку "Ѵ" сортируемой по столбцу post_isvms
@@ -868,4 +855,26 @@ function vms_ajax_toggle_vms() {
     );
     clean_post_cache($post_id);
     wp_send_json_success(array('post_isvms' => $new));
+}
+
+// Enqueue Verstka API script for front-end articles
+add_action('wp_enqueue_scripts', 'vms_enqueue_frontend_script');
+function vms_enqueue_frontend_script() {
+    if (is_singular('post')) {
+        $post = get_queried_object();
+        if (!empty($post->post_isvms)) {
+            wp_enqueue_script('verstka-api', 'https://go.verstka.org/api.js', [], null, true);
+        }
+    }
+}
+
+// Добавляем meta viewport для статей из Verstka
+add_action('wp_head', 'vms_add_viewport_meta');
+function vms_add_viewport_meta() {
+    if ( is_singular('post') ) {
+        $post = get_queried_object();
+        if ( ! empty( $post->post_isvms ) ) {
+            echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
+        }
+    }
 }
