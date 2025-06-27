@@ -129,10 +129,10 @@ function vms_editor_open() {
     // Set html_body based on mode using actual table columns
     if ( 'desktop' === $mode ) {
         $html_body = isset( $post->post_vms_content ) ? $post->post_vms_content : '';
-        $post_width = get_option('vms_desktop_width');
+        $post_width = get_option('vms_desktop_width', '960');
     } else {
         $html_body = isset( $post->post_vms_content_mobile ) ? $post->post_vms_content_mobile : '';
-        $post_width = get_option('vms_mobile_width');
+        $post_width = get_option('vms_mobile_width', '320');
     }
     $host_name    = parse_url( home_url(), PHP_URL_HOST );
     // Custom fields: example additional data
@@ -410,6 +410,7 @@ function getRequestSalt(string $secret, array $data, string $fields): string
 add_action('admin_menu', 'vms_add_admin_menu');
 add_action('admin_init', 'vms_register_settings');
 add_action('admin_post_vms_reset_api_key', 'vms_reset_api_key_callback');
+add_action('admin_post_vms_save_widths', 'vms_save_widths_callback');
 add_action('admin_enqueue_scripts', 'vms_enqueue_admin_assets');
 add_action('wp_ajax_vms_toggle_dev_mode', 'vms_toggle_dev_mode_callback');
 
@@ -435,6 +436,8 @@ function vms_register_settings() {
     register_setting('vms_settings_group', 'vms_images_dir', array('sanitize_callback' => 'sanitize_text_field'));
     register_setting('vms_settings_group', 'vms_dev_mode', array('sanitize_callback' => 'vms_sanitize_dev_mode'));
     register_setting('vms_settings_group', 'vms_secret', array('sanitize_callback' => 'sanitize_text_field'));
+    register_setting('vms_settings_group', 'vms_desktop_width', array('sanitize_callback' => 'sanitize_text_field'));
+    register_setting('vms_settings_group', 'vms_mobile_width', array('sanitize_callback' => 'sanitize_text_field'));
 
     add_settings_section(
         'vms_main_section',
@@ -478,7 +481,6 @@ function vms_register_settings() {
         'verstka-backend-settings',
         'vms_main_section'
     );
-
 }
 
 /**
@@ -494,7 +496,6 @@ function vms_render_settings_page() {
             <?php
             settings_fields('vms_settings_group');
             do_settings_sections('verstka-backend-settings');
-            // Show Save Settings only if API key not set
             if (! $saved_key) {
                 submit_button();
             }
@@ -504,6 +505,22 @@ function vms_render_settings_page() {
             <?php wp_nonce_field('vms_reset_api_key_action', 'vms_reset_api_key_nonce'); ?>
             <input type="hidden" name="action" value="vms_reset_api_key">
             <?php submit_button(__('Reset', 'verstka-backend'), 'secondary', 'vms_reset_submit', false); ?>
+        </form>
+        <h2><?php _e('Widths', 'verstka-backend'); ?></h2>
+        <form action="<?php echo esc_url(admin_url('admin-post.php')); ?>" method="post">
+            <?php wp_nonce_field('vms_save_widths_action', 'vms_save_widths_nonce'); ?>
+            <table class="form-table">
+                <tr>
+                    <th><?php _e('Desktop Width', 'verstka-backend'); ?></th>
+                    <td><input type="text" name="vms_desktop_width" value="<?php echo esc_attr(get_option('vms_desktop_width') ?: '960'); ?>" class="regular-text" placeholder="960" /></td>
+                </tr>
+                <tr>
+                    <th><?php _e('Mobile Width', 'verstka-backend'); ?></th>
+                    <td><input type="text" name="vms_mobile_width" value="<?php echo esc_attr(get_option('vms_mobile_width') ?: '320'); ?>" class="regular-text" placeholder="320" /></td>
+                </tr>
+            </table>
+            <input type="hidden" name="action" value="vms_save_widths">
+            <?php submit_button(__('Save Widths', 'verstka-backend')); ?>
         </form>
     </div>
     <?php
@@ -590,6 +607,22 @@ function vms_reset_api_key_callback() {
     delete_option('vms_secret');
     delete_option('vms_images_source');
     delete_option('vms_images_dir');
+    wp_redirect(admin_url('options-general.php?page=verstka-backend-settings'));
+    exit;
+}
+
+/**
+ * Handle Save Widths action.
+ */
+function vms_save_widths_callback() {
+    if (! current_user_can('manage_options')) {
+        wp_die(__('Permission denied', 'verstka-backend'));
+    }
+    check_admin_referer('vms_save_widths_action', 'vms_save_widths_nonce');
+    $desktop = sanitize_text_field($_POST['vms_desktop_width'] ?? '');
+    $mobile  = sanitize_text_field($_POST['vms_mobile_width']  ?? '');
+    update_option('vms_desktop_width', $desktop);
+    update_option('vms_mobile_width', $mobile);
     wp_redirect(admin_url('options-general.php?page=verstka-backend-settings'));
     exit;
 }
