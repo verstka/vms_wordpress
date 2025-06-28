@@ -2,8 +2,8 @@
 /*
 Plugin Name: Verstka Backend
 Plugin URI: https://github.com/verstka/vms_wordpress
-Description: plugin for verstka api on Backend.
-Version: 1.0.0
+Description: Powerfull design tool & WYSIWYG api on Backend.
+Version: 1.2.0
 Author: Verstka
 Author URI: https://verstka.io
 Text Domain: verstka-backend
@@ -100,14 +100,15 @@ function vms_register_routes() {
  * Open the VMS editor session.
  */
 function vms_editor_open() {
+    $is_debug = get_option('vms_dev_mode', 0);
     if (! current_user_can('edit_posts')) {
         wp_die(__('Permission denied', 'verstka-backend'));
     }
-    $user_id      = get_current_user_id();
+
+    $user_id     = get_current_user_id();
     $material_id = isset($_GET['post']) ? intval($_GET['post']) : 0;
-    $mode    = isset($_GET['mode']) && in_array($_GET['mode'], array('desktop','mobile'), true)
-               ? sanitize_key($_GET['mode'])
-               : 'desktop';
+    $mode        = isset($_GET['mode']) && in_array($_GET['mode'], array('desktop','mobile'), true) ? sanitize_key($_GET['mode']) : 'desktop';
+
     $post = get_post($material_id);
     if (! $post) {
         wp_die(__('Invalid post ID', 'verstka-backend'));
@@ -198,7 +199,17 @@ function vms_editor_open() {
     }
     $code = $res->status_code;
     if ( $code !== 200 ) {
-        $message = sprintf('%s '. __( 'HTTP error: %d', 'verstka-backend' ), $endpoint,$code );
+        if ( $is_debug ) {
+            wp_die(json_encode($form_fields, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES| JSON_PRETTY_PRINT).PHP_EOL.json_encode(['http_code' => $code]).PHP_EOL.$res->body);
+        }
+        if (!empty($res->body)) {
+            $data = json_decode($res->body, true);
+            if (!empty($data['rm'])) {
+                $message = $data['rm'];
+            } else {
+                $message = sprintf('%s '. __( 'HTTP error: %d', 'verstka-backend' ), $endpoint,$code );
+            }
+        }
         echo '<script>window.onload=function(){alert(' . json_encode( $message ) . ');history.back();};</script>';
         return;
     }
@@ -342,14 +353,13 @@ function vms_verstka_callback( WP_REST_Request $request ) {
 
     $source = str_replace('/vms_images/', sprintf('%s/', $images_rel), $data['html_body']);
 
-
     $db_data = ['post_isvms' => 1];
     if ( $is_mobile ) {
         $db_data['post_vms_content_mobile'] = $source;
     } else {
         $db_data['post_vms_content'] = $source;
     }
-    // Устанавливаем флаг VMS
+
     global $wpdb;
     $wpdb->update(
         $wpdb->posts,
@@ -362,7 +372,6 @@ function vms_verstka_callback( WP_REST_Request $request ) {
         wp_cache_clear_cache();
     }
 
-    // Формируем метрики: суммарное и реальное время
     $time_real = microtime(true) - $start_time;
     if ( $is_debug ) {
         return formJSON( 1, 'Success', array(
@@ -410,7 +419,7 @@ function getRequestSalt(string $secret, array $data, string $fields): string
 add_action('admin_menu', 'vms_add_admin_menu');
 add_action('admin_init', 'vms_register_settings');
 add_action('admin_post_vms_reset_api_key', 'vms_reset_api_key_callback');
-add_action('admin_post_vms_save_widths', 'vms_save_widths_callback');
+add_action('admin_post_vms_save_settings', 'vms_save_settings_callback');
 add_action('admin_enqueue_scripts', 'vms_enqueue_admin_assets');
 add_action('wp_ajax_vms_toggle_dev_mode', 'vms_toggle_dev_mode_callback');
 
@@ -497,7 +506,7 @@ function vms_render_settings_page() {
             settings_fields('vms_settings_group');
             do_settings_sections('verstka-backend-settings');
             if (! $saved_key) {
-                submit_button();
+                submit_button(__('Save Credentials', 'verstka-backend'));
             }
             ?>
         </form>
@@ -508,7 +517,7 @@ function vms_render_settings_page() {
         </form>
         <h2><?php _e('Widths', 'verstka-backend'); ?></h2>
         <form action="<?php echo esc_url(admin_url('admin-post.php')); ?>" method="post">
-            <?php wp_nonce_field('vms_save_widths_action', 'vms_save_widths_nonce'); ?>
+            <?php wp_nonce_field('vms_save_settings_action', 'vms_save_settings_nonce'); ?>
             <table class="form-table">
                 <tr>
                     <th><?php _e('Desktop Width', 'verstka-backend'); ?></th>
@@ -518,9 +527,13 @@ function vms_render_settings_page() {
                     <th><?php _e('Mobile Width', 'verstka-backend'); ?></th>
                     <td><input type="text" name="vms_mobile_width" value="<?php echo esc_attr(get_option('vms_mobile_width') ?: '320'); ?>" class="regular-text" placeholder="320" /></td>
                 </tr>
+                <tr>
+                    <th><?php _e('Fonts CSS URL', 'verstka-backend'); ?></th>
+                    <td><input type="text" name="vms_fonts_css_url" value="<?php echo esc_attr(get_option('vms_fonts_css_url') ?: ''); ?>" class="regular-text" placeholder="/vms_fonts.css" /></td>
+                </tr>
             </table>
-            <input type="hidden" name="action" value="vms_save_widths">
-            <?php submit_button(__('Save Widths', 'verstka-backend')); ?>
+            <input type="hidden" name="action" value="vms_save_settings">
+            <?php submit_button(__('Save Settings', 'verstka-backend')); ?>
         </form>
     </div>
     <?php
@@ -612,17 +625,19 @@ function vms_reset_api_key_callback() {
 }
 
 /**
- * Handle Save Widths action.
+ * Handle Save Settings action.
  */
-function vms_save_widths_callback() {
+function vms_save_settings_callback() {
     if (! current_user_can('manage_options')) {
         wp_die(__('Permission denied', 'verstka-backend'));
     }
-    check_admin_referer('vms_save_widths_action', 'vms_save_widths_nonce');
+    check_admin_referer('vms_save_settings_action', 'vms_save_settings_nonce');
     $desktop = sanitize_text_field($_POST['vms_desktop_width'] ?? '');
     $mobile  = sanitize_text_field($_POST['vms_mobile_width']  ?? '');
+    $fonts_css_url = sanitize_text_field($_POST['vms_fonts_css_url'] ?? '');
     update_option('vms_desktop_width', $desktop);
     update_option('vms_mobile_width', $mobile);
+    update_option('vms_fonts_css_url', $fonts_css_url);
     wp_redirect(admin_url('options-general.php?page=verstka-backend-settings'));
     exit;
 }
@@ -633,7 +648,7 @@ function vms_save_widths_callback() {
  * @param string $hook The current admin page.
  */
 function vms_enqueue_admin_assets($hook) {
-    $version = '1.0.0';
+    $version = '1.2.0';
     // Settings page scripts
     if ($hook === 'settings_page_verstka-backend-settings') {
         wp_enqueue_script('vms-admin-script', plugin_dir_url(__FILE__) . 'assets/js/vms_settings.js', array('jquery'), $version, true);
@@ -782,81 +797,7 @@ function vms_add_row_actions($actions, $post) {
     return $actions;
 }
 
-/**
- * Подменяет содержимое статьи на нужную версию контента
- */
-add_filter('the_content', 'apply_vms_content_after', 9999);
-function apply_vms_content_after($content)
-{
-    $post = get_post();
 
-	if ($post->post_isvms != 1) { // it's not an Verstka article
-        return $content;
-	}
-
-	if (post_password_required($post)) { // in case of post password protected
-		return $content;
-	}
-
-    $mobile = empty($post->post_vms_content_mobile) ? $post->post_vms_content : $post->post_vms_content_mobile;
-
-    $desktop = base64_encode($post->post_vms_content);
-    $mobile = base64_encode($mobile);
-	
-    $content = "<div class=\"verstka-article\">{$post->post_vms_content}</div>
-		<script type=\"text/javascript\" id=\"verstka-init\">
-		window.onVMSAPIReady = function (api) {
-			api.Article.enable({
-				display_mode: 'desktop'
-			});
-
-			document.querySelectorAll('article')[0].classList.add('shown');
-		};
-
-		function decodeHtml(base64) {
-		    return decodeURIComponent(atob(base64).split('').map(function(c) {return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);}).join(''))
-        }
-
-		var htmls = {
-			desktop: decodeHtml(`{$desktop}`),
-			mobile: decodeHtml(`{$mobile}`),
-		};
-		var isMobile = false;
-		var prev = null;
-
-		function switchHtml(html) {
-			var article = document.querySelector('.verstka-article')
-
-			if (window.VMS_API) {
-				window.VMS_API.Article.disable()
-			}
-
-			article.innerHTML = html;
-
-			if (window.VMS_API) {
-				window.VMS_API.Article.enable({display_mode: 'desktop'})
-			}
-		}
-
-		function onResize() {
-			var w = document.documentElement.clientWidth;
-
-			isMobile = w < 768;
-
-			if (prev !== isMobile) {
-				prev = isMobile
-				switchHtml(htmls[isMobile ? 'mobile' : 'desktop'])
-			}
-		}
-
-		onResize()
-
-		window.onresize = onResize;
-
-	</script>";
-
-    return $content;
-}
 
 // Сделать колонку "Ѵ" сортируемой по столбцу post_isvms
 add_filter('manage_edit-post_sortable_columns', 'verstka_sortable_vms_column');
@@ -912,28 +853,6 @@ function vms_ajax_toggle_vms() {
     );
     clean_post_cache($post_id);
     wp_send_json_success(array('post_isvms' => $new));
-}
-
-// Enqueue Verstka API script for front-end articles
-add_action('wp_enqueue_scripts', 'vms_enqueue_frontend_script');
-function vms_enqueue_frontend_script() {
-    if (is_singular('post')) {
-        $post = get_queried_object();
-        if (!empty($post->post_isvms)) {
-            wp_enqueue_script('verstka-api', 'https://go.verstka.org/api.js', [], null, true);
-        }
-    }
-}
-
-// Добавляем meta viewport для статей из Verstka
-add_action('wp_head', 'vms_add_viewport_meta');
-function vms_add_viewport_meta() {
-    if ( is_singular('post') ) {
-        $post = get_queried_object();
-        if ( ! empty( $post->post_isvms ) ) {
-            echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
-        }
-    }
 }
 
 // Support sorting by VMS flag on posts and pages
@@ -1024,4 +943,102 @@ function vms_add_classic_editor_buttons($editor_id) {
         '<a href="%s" class="button vms-edit-mobile" target="_blank">%s</a>',
         esc_url($mobile_url), esc_html__('Mobile', 'verstka-backend')
     );
+}
+
+// Enqueue Verstka API script for front-end articles
+add_action('wp_enqueue_scripts', 'vms_enqueue_frontend_script');
+function vms_enqueue_frontend_script() {
+    if (is_singular('post')) {
+        $post = get_queried_object();
+        if (!empty($post->post_isvms)) {
+            wp_enqueue_script('verstka-api', 'https://go.verstka.org/api.js', [], null, true);
+        }
+    }
+}
+
+// Добавляем meta viewport для статей из Verstka
+add_action('wp_head', 'vms_add_viewport_meta');
+function vms_add_viewport_meta() {
+    if ( is_singular('post') ) {
+        $post = get_queried_object();
+        if ( ! empty( $post->post_isvms ) ) {
+            echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
+        }
+    }
+}
+
+/**
+ * Подменяет содержимое статьи на нужную версию контента
+ */
+add_filter('the_content', 'apply_vms_content_after', 9999);
+function apply_vms_content_after($content)
+{
+    $post = get_post();
+
+	if ($post->post_isvms != 1) { // it's not an Verstka article
+        return $content;
+	}
+
+	if (post_password_required($post)) { // in case of post password protected
+		return $content;
+	}
+
+    $mobile = empty($post->post_vms_content_mobile) ? $post->post_vms_content : $post->post_vms_content_mobile;
+
+    $desktop = base64_encode($post->post_vms_content);
+    $mobile = base64_encode($mobile);
+	
+    $content = "<div class=\"verstka-article\">{$post->post_vms_content}</div>
+		<script type=\"text/javascript\" id=\"verstka-init\">
+		window.onVMSAPIReady = function (api) {
+			api.Article.enable({
+				display_mode: 'desktop'
+			});
+
+			document.querySelectorAll('article')[0].classList.add('shown');
+		};
+
+		function decodeHtml(base64) {
+		    return decodeURIComponent(atob(base64).split('').map(function(c) {return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);}).join(''))
+        }
+
+		var htmls = {
+			desktop: decodeHtml(`{$desktop}`),
+			mobile: decodeHtml(`{$mobile}`),
+		};
+		var isMobile = false;
+		var prev = null;
+
+		function switchHtml(html) {
+			var article = document.querySelector('.verstka-article')
+
+			if (window.VMS_API) {
+				window.VMS_API.Article.disable()
+			}
+
+			article.innerHTML = html;
+
+			if (window.VMS_API) {
+				window.VMS_API.Article.enable({display_mode: 'desktop'})
+			}
+		}
+
+		function onResize() {
+			var w = document.documentElement.clientWidth;
+
+			isMobile = w < 768;
+
+			if (prev !== isMobile) {
+				prev = isMobile
+				switchHtml(htmls[isMobile ? 'mobile' : 'desktop'])
+			}
+		}
+
+		onResize()
+
+		window.onresize = onResize;
+
+	</script>";
+
+    return $content;
 }
