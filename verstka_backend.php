@@ -232,9 +232,9 @@ function vms_editor_open() {
  * @return \WP_REST_Response
  */
 function vms_verstka_callback( WP_REST_Request $request ) {
-    // Инициализируем массив запросов
+    // Initialize the requests array
     $requests = [];
-    // Получаем параметры запроса: сначала JSON, затем тело формы
+    // Retrieve request parameters: JSON first, then form body
     $data = $request->get_body_params();
     $is_debug = get_option('vms_dev_mode', 0);
 
@@ -256,7 +256,7 @@ function vms_verstka_callback( WP_REST_Request $request ) {
         return formJSON( 0, 'Invalid callback sign');
     }
 
-    // Распаковываем JSON в custom_fields, если он есть
+    // Decode JSON in custom_fields if present
     if ( ! empty( $data['custom_fields'] ) ) {
         $decoded = json_decode( $data['custom_fields'], true );
         if ( null !== $decoded ) {
@@ -287,14 +287,14 @@ function vms_verstka_callback( WP_REST_Request $request ) {
         return formJSON( 0, 'html_body not set');
     }
 
-    // Получаем список файлов по download_url (JSON)
+    // Fetch list of files from download_url (JSON)
     $download_endpoint = str_replace('http://', 'https://', $data['download_url']);
-    // Подключаем и регистрируем автозагрузчик Requests
+    // Include and register the Requests autoloader
     if ( ! class_exists( '\WpOrg\Requests\Requests' ) ) {
         require_once ABSPATH . WPINC . '/Requests/Requests.php';
         \WpOrg\Requests\Requests::register_autoloader();
     }
-    // Запрашиваем JSON со списком файлов
+    // Request JSON containing the file list
     try {
         $list_res = \WpOrg\Requests\Requests::get(
             $download_endpoint,
@@ -322,7 +322,7 @@ function vms_verstka_callback( WP_REST_Request $request ) {
         return formJSON( 0, 'Images Directory not writable');
     }
 
-    // Формируем массив URL для скачивания
+    // Build array of URLs for downloading
     if ( isset($list_data['data']) && is_array($list_data['data']) ) {
         foreach ($list_data['data'] as $image) {
             $requests[$image] = [
@@ -339,7 +339,7 @@ function vms_verstka_callback( WP_REST_Request $request ) {
         }
     }
 
-    // Выполняем параллельные запросы и замеряем время
+    // Execute parallel requests and measure time
     $start_time = microtime(true);
     $results = \WpOrg\Requests\Requests::request_multiple($requests);
     foreach ( $results as $result ) {
@@ -366,7 +366,7 @@ function vms_verstka_callback( WP_REST_Request $request ) {
         $db_data,
         array('ID' => $data['material_id'])
     );
-    // Сбросим кэш поста
+    // Clear the post cache
     clean_post_cache( $data['material_id'] );
     if (function_exists('wp_cache_clear_cache')) {
         wp_cache_clear_cache();
@@ -769,7 +769,7 @@ add_filter('post_row_actions', 'vms_add_row_actions', 10, 2);
 // Also add actions for pages
 add_filter('page_row_actions', 'vms_add_row_actions', 10, 2);
 /**
- * Add "Редактировать в Verstka Desktop" and "Редактировать в Mobile" links to post row actions.
+ * Add "Edit in Verstka Desktop" and "Edit in Mobile" links to post row actions.
  */
 function vms_add_row_actions($actions, $post) {
     if ( in_array($post->post_type, array('post','page'), true) ) {
@@ -797,12 +797,9 @@ function vms_add_row_actions($actions, $post) {
     return $actions;
 }
 
-
-
-// Сделать колонку "Ѵ" сортируемой по столбцу post_isvms
 add_filter('manage_edit-post_sortable_columns', 'verstka_sortable_vms_column');
+// Make the "Ѵ" column sortable by the post_isvms field
 function verstka_sortable_vms_column($columns) {
-    // Make VMS column sortable by our custom orderby 'post_isvms'
     $columns['post_isvms'] = 'post_isvms';
     return $columns;
 }
@@ -886,7 +883,7 @@ function vms_replace_edit_post_link($link, $post_id, $text) {
 
 add_action('enqueue_block_editor_assets', 'vms_enqueue_block_editor_buttons');
 function vms_enqueue_block_editor_buttons() {
-    // Получаем ID редактируемого поста из параметра запроса
+    // Get the post ID being edited from the query parameter
     $post_id = isset($_GET['post']) ? intval($_GET['post']) : 0;
     if (!$post_id) {
         return;
@@ -956,7 +953,7 @@ function vms_enqueue_frontend_script() {
     }
 }
 
-// Добавляем meta viewport для статей из Verstka
+// Add meta viewport tag for Verstka articles
 add_action('wp_head', 'vms_add_viewport_meta');
 function vms_add_viewport_meta() {
     if ( is_singular('post') ) {
@@ -968,7 +965,7 @@ function vms_add_viewport_meta() {
 }
 
 /**
- * Подменяет содержимое статьи на нужную версию контента
+ * Replace article content with the appropriate version
  */
 add_filter('the_content', 'apply_vms_content_after', 9999);
 function apply_vms_content_after($content)
