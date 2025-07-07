@@ -649,6 +649,10 @@ function vms_save_settings_callback() {
  */
 function vms_enqueue_admin_assets($hook) {
     $version = '1.2.0';
+    
+    // Подключаем CSS для всех админ страниц
+    wp_enqueue_style('vms-admin-style', plugin_dir_url(__FILE__) . 'assets/css/vms_admin.css', array(), $version);
+    
     // Settings page scripts
     if ($hook === 'settings_page_verstka-backend-settings') {
         wp_enqueue_script('vms-admin-script', plugin_dir_url(__FILE__) . 'assets/js/vms_settings.js', array('jquery'), $version, true);
@@ -742,11 +746,7 @@ function fill_post_isvms_column($column_name, $post_id) {
     );
 }
 
-add_action('admin_head', 'add_post_isvms_column_css');
-function add_post_isvms_column_css()
-{
-    echo '<style type="text/css">.column-post_isvms{width:3%;}</style>';
-}
+// CSS стили теперь подключаются через отдельный файл vms_admin.css
 
 // Register hidden editor page for Verstka
 add_action('admin_menu', 'vms_add_editor_page');
@@ -905,7 +905,7 @@ function vms_enqueue_block_editor_buttons() {
         'vms-block-editor',
         plugin_dir_url(__FILE__) . 'assets/js/vms_block_editor.js',
         array('wp-plugins', 'wp-edit-post', 'wp-components', 'wp-element', 'wp-i18n'),
-        '1.0.0',
+        '1.2.0',
         true
     );
     wp_localize_script(

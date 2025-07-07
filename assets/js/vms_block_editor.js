@@ -1,34 +1,79 @@
 ( function( wp ) {
     const { registerPlugin } = wp.plugins;
-    const { PluginPostPublishPanel } = wp.editor;
-    const { Button } = wp.components;
+    const { PluginMoreMenuItem, PluginDocumentSettingPanel } = wp.editPost;
+    const { Button, Panel, PanelBody, PanelRow } = wp.components;
     const { __ } = wp.i18n;
-    const { createElement } = wp.element;
+    const { createElement, Fragment } = wp.element;
 
-    const VmsEditorButtons = () => {
+    // Добавляем пункты в меню "Дополнительно" (три точки)
+    const VmsMoreMenuItems = () => {
         return createElement(
-            PluginPostPublishPanel,
-            { title: __( 'Verstka Editor', 'verstka-backend' ) },
+            Fragment,
+            null,
             createElement(
-                Button,
+                PluginMoreMenuItem,
                 {
-                    isSecondary: true,
+                    icon: 'desktop',
                     onClick: () => window.open( vmsBlockEditor.desktopUrl, '_blank' ),
                 },
-                __( 'Desktop', 'verstka-backend' )
+                __( 'Verstka Desktop', 'verstka-backend' )
             ),
             createElement(
-                Button,
+                PluginMoreMenuItem,
                 {
-                    isSecondary: true,
+                    icon: 'smartphone',
                     onClick: () => window.open( vmsBlockEditor.mobileUrl, '_blank' ),
                 },
-                __( 'Mobile', 'verstka-backend' )
+                __( 'Verstka Mobile', 'verstka-backend' )
             )
         );
     };
 
+    // Добавляем панель в боковое меню документа
+    const VmsDocumentSettingPanel = () => {
+        return createElement(
+            PluginDocumentSettingPanel,
+            {
+                name: 'vms-editor-panel',
+                title: __( 'Verstka Editor', 'verstka-backend' ),
+                className: 'vms-editor-panel',
+            },
+            createElement(
+                PanelRow,
+                null,
+                createElement(
+                    'div',
+                    { style: { display: 'flex', gap: '8px', width: '100%' } },
+                    createElement(
+                        Button,
+                        {
+                            isPrimary: true,
+                            onClick: () => window.open( vmsBlockEditor.desktopUrl, '_blank' ),
+                            style: { flex: 1 }
+                        },
+                        __( 'Desktop', 'verstka-backend' )
+                    ),
+                    createElement(
+                        Button,
+                        {
+                            isPrimary: true,
+                            onClick: () => window.open( vmsBlockEditor.mobileUrl, '_blank' ),
+                            style: { flex: 1 }
+                        },
+                        __( 'Mobile', 'verstka-backend' )
+                    )
+                )
+            )
+        );
+    };
+
+    // Регистрируем плагин с обеими функциями
     registerPlugin( 'vms-editor-buttons', {
-        render: VmsEditorButtons,
+        render: () => createElement(
+            Fragment,
+            null,
+            createElement( VmsMoreMenuItems ),
+            createElement( VmsDocumentSettingPanel )
+        ),
     } );
 } )( window.wp ); 

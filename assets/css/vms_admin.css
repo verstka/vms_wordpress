@@ -1,0 +1,96 @@
+/* Verstka Backend Admin Styles */
+
+/* Стили для панели в блочном редакторе */
+.vms-editor-panel .components-panel__body {
+    border: none !important;
+}
+
+.vms-editor-panel .components-panel__row {
+    margin: 0 !important;
+}
+
+/* Стили для кнопок в меню "Дополнительно" */
+.components-menu-item__button[aria-label*="Verstka"] {
+    color: #0073aa !important;
+}
+
+.components-menu-item__button[aria-label*="Verstka"]:hover {
+    color: #005a87 !important;
+}
+
+/* Иконки для кнопок */
+.components-menu-item__button[aria-label*="Desktop"] .dashicon:before {
+    content: "\f472"; /* dashicon-desktop */
+}
+
+.components-menu-item__button[aria-label*="Mobile"] .dashicon:before {
+    content: "\f470"; /* dashicon-smartphone */
+}
+
+/* Стили для кнопок VMS в списке постов */
+.vms-toggle {
+    font-size: 16px;
+    text-decoration: none;
+    color: #666;
+}
+
+.vms-toggle:hover {
+    color: #0073aa;
+}
+
+/* Стили для VMS колонки */
+.column-post_isvms {
+    width: 3%;
+    text-align: center;
+}
+
+/* Стили для кнопок редактирования */
+.vms-edit-button {
+    display: inline-block;
+    margin-right: 5px;
+    padding: 2px 8px;
+    background: #0073aa;
+    color: white !important;
+    text-decoration: none;
+    border-radius: 3px;
+    font-size: 11px;
+}
+
+.vms-edit-button:hover {
+    background: #005a87;
+    color: white !important;
+}
+
+.vms-edit-desktop {
+    background: #0073aa;
+}
+
+.vms-edit-mobile {
+    background: #00a32a;
+}
+
+.vms-edit-mobile:hover {
+    background: #007a1f;
+}
+
+/* Стили для настроек плагина */
+.verstka-settings-section {
+    background: #f9f9f9;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 15px;
+    margin: 20px 0;
+}
+
+.verstka-settings-section h3 {
+    margin-top: 0;
+    color: #0073aa;
+}
+
+/* Адаптивные стили */
+@media (max-width: 782px) {
+    .vms-edit-button {
+        font-size: 12px;
+        padding: 4px 8px;
+    }
+} 
