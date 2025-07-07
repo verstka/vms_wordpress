@@ -9,6 +9,12 @@
     margin: 0 !important;
 }
 
+/* Центрирование текста в кнопках панели */
+.vms-editor-panel .components-button {
+    justify-content: center !important;
+    text-align: center !important;
+}
+
 /* Стили для кнопок в меню "Дополнительно" */
 .components-menu-item__button[aria-label*="Verstka"] {
     color: #0073aa !important;
@@ -40,8 +46,16 @@
 
 /* Стили для VMS колонки */
 .column-post_isvms {
-    width: 3%;
-    text-align: center;
+    width: 3% !important;
+    text-align: center !important;
+}
+
+/* Специфичные стили для списка постов и страниц */
+.wp-list-table .column-post_isvms,
+.posts .column-post_isvms,
+.pages .column-post_isvms {
+    width: 3% !important;
+    text-align: center !important;
 }
 
 /* Стили для кнопок редактирования */

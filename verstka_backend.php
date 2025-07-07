@@ -73,7 +73,6 @@ add_action('init', 'vms_init');
  */
 function vms_enqueue_assets() {
     $version = '1.2.0';
-    wp_enqueue_style('vms-style', plugin_dir_url(__FILE__) . 'assets/css/vms_wordpress.css', array(), $version);
     wp_enqueue_script('vms-script', plugin_dir_url(__FILE__) . 'assets/js/vms_plugin.js', array('jquery'), $version, true);
 }
 add_action('wp_enqueue_scripts', 'vms_enqueue_assets');
