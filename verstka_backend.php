@@ -3,7 +3,7 @@
 Plugin Name: Verstka Backend
 Plugin URI: https://github.com/verstka/vms_wordpress
 Description: Powerfull design tool & WYSIWYG api on Backend.
-Version: 1.2.0
+Version: 1.2.1
 Author: Verstka
 Author URI: https://verstka.io
 Text Domain: verstka-backend
@@ -51,6 +51,9 @@ function vms_activate() {
             );
         }
     }
+    
+    // Flush permalinks to ensure REST API routes work
+    flush_rewrite_rules();
 }
 
 /**
@@ -61,18 +64,52 @@ function vms_deactivate() {
 }
 
 /**
- * Initialize plugin: load textdomain
+ * Initialize plugin: load textdomain and check compatibility
  */
 function vms_init() {
     load_plugin_textdomain('verstka-backend', false, dirname(plugin_basename(__FILE__)) . '/languages');
+    
+    // Check WordPress version compatibility
+    global $wp_version;
+    if (version_compare($wp_version, '5.0', '<')) {
+        add_action('admin_notices', 'vms_wp_version_notice');
+        return;
+    }
+    
+    // Ensure REST API is enabled
+    if (!function_exists('rest_url')) {
+        add_action('admin_notices', 'vms_rest_api_notice');
+        return;
+    }
 }
 add_action('init', 'vms_init');
+
+/**
+ * WordPress version compatibility notice
+ */
+function vms_wp_version_notice() {
+    echo '<div class="notice notice-error"><p>';
+    echo sprintf(
+        __('Verstka Backend requires WordPress 5.0 or higher. You are running version %s.', 'verstka-backend'),
+        get_bloginfo('version')
+    );
+    echo '</p></div>';
+}
+
+/**
+ * REST API availability notice
+ */
+function vms_rest_api_notice() {
+    echo '<div class="notice notice-error"><p>';
+    echo __('Verstka Backend requires WordPress REST API to be enabled.', 'verstka-backend');
+    echo '</p></div>';
+}
 
 /**
  * Enqueue front-end scripts and styles
  */
 function vms_enqueue_assets() {
-    $version = '1.2.0';
+    $version = '1.2.1';
     wp_enqueue_script('vms-script', plugin_dir_url(__FILE__) . 'assets/js/vms_plugin.js', array('jquery'), $version, true);
 }
 add_action('wp_enqueue_scripts', 'vms_enqueue_assets');
@@ -93,6 +130,32 @@ function vms_register_routes() {
             'permission_callback' => '__return_true',
         )
     );
+    
+    // Add a test endpoint for diagnostics
+    register_rest_route(
+        'verstka/v1',
+        '/test',
+        array(
+            'methods'             => 'GET',
+            'callback'            => 'vms_test_endpoint',
+            'permission_callback' => '__return_true',
+        )
+    );
+}
+
+/**
+ * Test endpoint for REST API diagnostics
+ */
+function vms_test_endpoint( WP_REST_Request $request ) {
+    return rest_ensure_response(array(
+        'status' => 'success',
+        'message' => 'Verstka REST API is working',
+        'version' => '1.2.1',
+        'php_version' => phpversion(),
+        'wordpress_version' => get_bloginfo('version'),
+        'rest_url' => rest_url('verstka/v1/'),
+        'timestamp' => current_time('mysql')
+    ));
 }
 
 /**
@@ -120,11 +183,7 @@ function vms_editor_open() {
         return;
     }
     $endpoint = 'https://verstka.org/1/open';
-    // Send x-www-form-urlencoded request via Requests library
-    if ( ! class_exists( '\WpOrg\Requests\Requests' ) ) {
-        require_once ABSPATH . WPINC . '/Requests/Requests.php';
-        \WpOrg\Requests\Requests::register_autoloader();
-    }
+    // Send x-www-form-urlencoded request via cURL
 
     // Set html_body based on mode using actual table columns
     if ( 'desktop' === $mode ) {
@@ -185,24 +244,22 @@ function vms_editor_open() {
 
     $form_fields['callback_sign'] = getRequestSalt($secret, $form_fields, 'api-key, material_id, user_id, callback_url');
 
-    $options = array(
-        'timeout'     => 90,
-        'data_format' => 'body',
-    );
-
     try {
-        $res = \WpOrg\Requests\Requests::post( $endpoint, array(), $form_fields, $options );
+        $res = vms_curl_post($endpoint, $form_fields, 90);
+        if ($res === false) {
+            throw new Exception('cURL request failed');
+        }
     } catch ( \Exception $e ) {
         echo '<script>window.onload=function(){alert(' . json_encode( $e->getMessage() ) . ');history.back();};</script>';
         return;
     }
-    $code = $res->status_code;
+    $code = $res['http_code'];
     if ( $code !== 200 ) {
         if ( $is_debug ) {
-            wp_die(json_encode($form_fields, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES| JSON_PRETTY_PRINT).PHP_EOL.json_encode(['http_code' => $code]).PHP_EOL.$res->body);
+            wp_die(json_encode($form_fields, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES| JSON_PRETTY_PRINT).PHP_EOL.json_encode(['http_code' => $code]).PHP_EOL.$res['body']);
         }
-        if (!empty($res->body)) {
-            $data = json_decode($res->body, true);
+        if (!empty($res['body'])) {
+            $data = json_decode($res['body'], true);
             if (!empty($data['rm'])) {
                 $message = $data['rm'];
             } else {
@@ -212,7 +269,7 @@ function vms_editor_open() {
         echo '<script>window.onload=function(){alert(' . json_encode( $message ) . ');history.back();};</script>';
         return;
     }
-    $data = json_decode( $res->body, true );
+    $data = json_decode( $res['body'], true );
 
     if (empty($data['rc']) || empty($data['data']['edit_url'])) {
         $message = !empty($data['rm']) ? $data['rm'] : __('Unknown error', 'verstka-backend');
@@ -231,8 +288,6 @@ function vms_editor_open() {
  * @return \WP_REST_Response
  */
 function vms_verstka_callback( WP_REST_Request $request ) {
-    // Initialize the requests array
-    $requests = [];
     // Retrieve request parameters: JSON first, then form body
     $data = $request->get_body_params();
     $is_debug = get_option('vms_dev_mode', 0);
@@ -288,26 +343,20 @@ function vms_verstka_callback( WP_REST_Request $request ) {
 
     // Fetch list of files from download_url (JSON)
     $download_endpoint = str_replace('http://', 'https://', $data['download_url']);
-    // Include and register the Requests autoloader
-    if ( ! class_exists( '\WpOrg\Requests\Requests' ) ) {
-        require_once ABSPATH . WPINC . '/Requests/Requests.php';
-        \WpOrg\Requests\Requests::register_autoloader();
-    }
-    // Request JSON containing the file list
+    
+    // Request JSON containing the file list via cURL
     try {
-        $list_res = \WpOrg\Requests\Requests::get(
-            $download_endpoint,
-            [],
-            [],
-            ['timeout' => 60, 'data_format' => 'body']
-        );
+        $list_res = vms_curl_get($download_endpoint, 60);
+        if ($list_res === false) {
+            throw new Exception('cURL request failed');
+        }
     } catch (\Exception $e) {
         return formJSON(0, 'File list request failed: ' . $e->getMessage());
     }
-    if ($list_res->status_code !== 200) {
-        return formJSON(0, sprintf('File list HTTP error: %d', $list_res->status_code));
+    if ($list_res['http_code'] !== 200) {
+        return formJSON(0, sprintf('File list HTTP error: %d', $list_res['http_code']));
     }
-    $list_data = json_decode($list_res->body, true);
+    $list_data = json_decode($list_res['body'], true);
     if (empty($list_data['data']) || !is_array($list_data['data'])) {
         return formJSON(0, 'Invalid file list JSON', $list_data);
     }
@@ -321,36 +370,45 @@ function vms_verstka_callback( WP_REST_Request $request ) {
         return formJSON( 0, 'Images Directory not writable');
     }
 
-    // Build array of URLs for downloading
+    // Download files using multi-threaded cURL
+    $start_time = microtime(true);
+    $download_results = [];
+    $download_stats = ['total_files' => 0, 'successful' => 0, 'failed' => 0, 'total_size_mb' => 0, 'success_rate' => 100];
+    
     if ( isset($list_data['data']) && is_array($list_data['data']) ) {
+        // Prepare download array
+        $downloads = [];
         foreach ($list_data['data'] as $image) {
-            $requests[$image] = [
-                'url'     => sprintf('%s/%s', $download_endpoint, $image),
-                'type'    => 'GET',
-                'options' => [
-                    'timeout'         => 60,
-                    'connect_timeout' => 3.14,
-                    'useragent'       => 'verstka wordpress 1.2',
-                    'stream'          => true,
-                    'filename'        => trailingslashit($images_abs) . basename($image),
-                ],
+            $file_url = sprintf('%s/%s', $download_endpoint, $image);
+            $file_path = trailingslashit($images_abs) . basename($image);
+            $downloads[] = [
+                'url' => $file_url,
+                'path' => $file_path,
+                'filename' => $image
             ];
         }
-    }
-
-    // Execute parallel requests and measure time
-    $start_time = microtime(true);
-    $results = \WpOrg\Requests\Requests::request_multiple($requests);
-    foreach ( $results as $result ) {
-        if ( $result->status_code !== 200 ) {
+        
+        // Execute multi-threaded download (max 20 concurrent)
+        $download_results = vms_curl_download_multiple($downloads, 60, 20);
+        $download_stats = vms_get_download_stats($download_results);
+        
+        // Check for errors
+        $failed_downloads = array_filter($download_results, function($r) { return !$r['success']; });
+        if (!empty($failed_downloads)) {
+            $first_error = reset($failed_downloads);
+            $error_msg = sprintf('Download failed: %s (Total: %d files, Failed: %d)', 
+                $first_error['error'], $download_stats['total_files'], $download_stats['failed']);
             if ( $is_debug ) {
-                return formJSON( 0, sprintf( 'Download %s HTTP error: %d', $result->url, $result->status_code ), $result);
+                return formJSON( 0, $error_msg, array(
+                    'download_results' => $download_results,
+                    'download_stats' => $download_stats
+                ));
             }
-            return formJSON( 0, sprintf( 'Download %s HTTP error: %d', $result->url, $result->status_code ) );
+            return formJSON( 0, $error_msg );
         }
     }
 
-    $source = str_replace('/vms_images/', sprintf('%s/', $images_rel), $data['html_body']);
+    $source = str_replace('/vms_images/', sprintf('%s', $images_rel), $data['html_body']);
 
     $db_data = ['post_isvms' => 1];
     if ( $is_mobile ) {
@@ -375,13 +433,15 @@ function vms_verstka_callback( WP_REST_Request $request ) {
     if ( $is_debug ) {
         return formJSON( 1, 'Success', array(
             'images_list' => $images_list,
+            'download_results' => $download_results,
+            'download_stats' => $download_stats,
             'time_real'   => $time_real,
-            'results'     => $results,
             'data'        => $data,
         ) );
     }
     return formJSON( 1, 'Success', array(
         'time_real'   => $time_real,
+        'download_stats' => $download_stats,
     ) );
 }
 
@@ -421,6 +481,7 @@ add_action('admin_post_vms_reset_api_key', 'vms_reset_api_key_callback');
 add_action('admin_post_vms_save_settings', 'vms_save_settings_callback');
 add_action('admin_enqueue_scripts', 'vms_enqueue_admin_assets');
 add_action('wp_ajax_vms_toggle_dev_mode', 'vms_toggle_dev_mode_callback');
+add_action('wp_ajax_vms_flush_permalinks', 'vms_flush_permalinks_callback');
 
 /**
  * Add settings page under Settings menu.
@@ -497,9 +558,26 @@ function vms_register_settings() {
 function vms_render_settings_page() {
     // Check if API key is saved to conditionally display Save button
     $saved_key = get_option('vms_api_key');
+    
+    // REST API Diagnostic
+    $rest_test_url = rest_url('verstka/v1/test');
+    $callback_url = rest_url('verstka/v1/callback');
     ?>
     <div class="wrap">
         <h1><?php echo esc_html__('Verstka Backend Settings', 'verstka-backend'); ?></h1>
+        
+        <!-- REST API Diagnostics Section -->
+        <div class="notice notice-info" style="padding: 15px; margin: 20px 0;">
+            <h3><?php _e('REST API Diagnostics', 'verstka-backend'); ?></h3>
+            <p><strong><?php _e('Test URL:', 'verstka-backend'); ?></strong> <a href="<?php echo esc_url($rest_test_url); ?>" target="_blank"><?php echo esc_html($rest_test_url); ?></a></p>
+            <p><strong><?php _e('Callback URL:', 'verstka-backend'); ?></strong> <?php echo esc_html($callback_url); ?></p>
+            <p>
+                <button type="button" id="vms-test-api" class="button button-secondary"><?php _e('Test REST API', 'verstka-backend'); ?></button>
+                <button type="button" id="vms-flush-permalinks" class="button button-secondary"><?php _e('Reset Permalinks', 'verstka-backend'); ?></button>
+                <span id="vms-api-status"></span>
+            </p>
+        </div>
+        
         <form action="options.php" method="post">
             <?php
             settings_fields('vms_settings_group');
@@ -534,6 +612,63 @@ function vms_render_settings_page() {
             <input type="hidden" name="action" value="vms_save_settings">
             <?php submit_button(__('Save Settings', 'verstka-backend')); ?>
         </form>
+        
+        <script>
+        jQuery(document).ready(function($) {
+            // Test REST API
+            $('#vms-test-api').click(function() {
+                var button = $(this);
+                var status = $('#vms-api-status');
+                
+                button.prop('disabled', true).text('<?php _e('Testing...', 'verstka-backend'); ?>');
+                status.html('<span style="color: orange;">Testing...</span>');
+                
+                $.get('<?php echo esc_url($rest_test_url); ?>')
+                    .done(function(data) {
+                        status.html('<span style="color: green;">✓ REST API working correctly</span>');
+                        console.log('REST API Test:', data);
+                    })
+                    .fail(function(xhr) {
+                        status.html('<span style="color: red;">✗ REST API error: ' + xhr.status + ' ' + xhr.statusText + '</span>');
+                        console.error('REST API Test failed:', xhr);
+                    })
+                    .always(function() {
+                        button.prop('disabled', false).text('<?php _e('Test REST API', 'verstka-backend'); ?>');
+                    });
+            });
+            
+            // Flush permalinks
+            $('#vms-flush-permalinks').click(function() {
+                var button = $(this);
+                var status = $('#vms-api-status');
+                
+                button.prop('disabled', true).text('<?php _e('Resetting...', 'verstka-backend'); ?>');
+                status.html('<span style="color: orange;">Resetting permalinks...</span>');
+                
+                $.post(ajaxurl, {
+                    action: 'vms_flush_permalinks',
+                    nonce: '<?php echo wp_create_nonce('vms_flush_permalinks'); ?>'
+                })
+                .done(function(data) {
+                    if (data.success) {
+                        status.html('<span style="color: green;">✓ Permalinks reset successfully</span>');
+                        // Auto-test API after flush
+                        setTimeout(function() {
+                            $('#vms-test-api').click();
+                        }, 1000);
+                    } else {
+                        status.html('<span style="color: red;">✗ Error: ' + data.data.message + '</span>');
+                    }
+                })
+                .fail(function(xhr) {
+                    status.html('<span style="color: red;">✗ AJAX error: ' + xhr.status + '</span>');
+                })
+                .always(function() {
+                    button.prop('disabled', false).text('<?php _e('Reset Permalinks', 'verstka-backend'); ?>');
+                });
+            });
+        });
+        </script>
     </div>
     <?php
 }
@@ -647,7 +782,7 @@ function vms_save_settings_callback() {
  * @param string $hook The current admin page.
  */
 function vms_enqueue_admin_assets($hook) {
-    $version = '1.2.0';
+    $version = '1.2.1';
     
     // Подключаем CSS для всех админ страниц
     wp_enqueue_style('vms-admin-style', plugin_dir_url(__FILE__) . 'assets/css/vms_admin.css', array(), $version);
@@ -692,6 +827,19 @@ function vms_toggle_dev_mode_callback() {
         'updated'  => $updated,
         'saved'    => $saved,
     ));
+}
+
+/**
+ * AJAX callback to flush permalinks.
+ */
+function vms_flush_permalinks_callback() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('message' => __('Permission denied', 'verstka-backend')));
+    }
+    check_ajax_referer('vms_flush_permalinks', 'nonce');
+    // Flush rewrite rules
+    flush_rewrite_rules();
+    wp_send_json_success(array('message' => __('Permalinks flushed successfully', 'verstka-backend')));
 }
 
 /*
@@ -889,9 +1037,7 @@ function vms_enqueue_block_editor_buttons() {
     }
     
     $post = get_post($post_id);
-    if (!$post || empty($post->post_isvms)) {
-        return;
-    }
+    
     $desktop_url = add_query_arg(
         array('page' => 'vms-editor', 'mode' => 'desktop', 'post' => $post_id),
         admin_url('admin.php')
@@ -904,7 +1050,7 @@ function vms_enqueue_block_editor_buttons() {
         'vms-block-editor',
         plugin_dir_url(__FILE__) . 'assets/js/vms_block_editor.js',
         array('wp-plugins', 'wp-edit-post', 'wp-components', 'wp-element', 'wp-i18n'),
-        '1.2.0',
+        '1.2.1',
         true
     );
     wp_localize_script(
@@ -920,9 +1066,7 @@ function vms_enqueue_block_editor_buttons() {
 add_action('media_buttons', 'vms_add_classic_editor_buttons', 11);
 function vms_add_classic_editor_buttons($editor_id) {
     global $post;
-    if (empty($post->post_isvms)) {
-        return;
-    }
+    
     $desktop_url = add_query_arg(
         array('page' => 'vms-editor', 'mode' => 'desktop', 'post' => $post->ID),
         admin_url('admin.php')
@@ -1037,4 +1181,319 @@ function apply_vms_content_after($content)
 	</script>";
 
     return $content;
+}
+
+/**
+ * cURL GET request wrapper
+ *
+ * @param string $url The URL to request
+ * @param int $timeout Timeout in seconds
+ * @return array|false Response array with 'body' and 'http_code' keys or false on failure
+ */
+function vms_curl_get($url, $timeout = 30) {
+    $ch = curl_init();
+    $is_dev_mode = get_option('vms_dev_mode', 0);
+    
+    $curl_options = [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_USERAGENT => 'verstka wordpress 1.2',
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 3,
+    ];
+    
+    // Отключаем SSL проверку только в dev режиме
+    if ($is_dev_mode) {
+        $curl_options[CURLOPT_SSL_VERIFYPEER] = false;
+        $curl_options[CURLOPT_SSL_VERIFYHOST] = false;
+    }
+    
+    curl_setopt_array($ch, $curl_options);
+    
+    $body = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+    
+    if ($body === false || !empty($error)) {
+        return false;
+    }
+    
+    return [
+        'body' => $body,
+        'http_code' => $http_code
+    ];
+}
+
+/**
+ * cURL POST request wrapper
+ *
+ * @param string $url The URL to request
+ * @param array $data Post data
+ * @param int $timeout Timeout in seconds
+ * @return array|false Response array with 'body' and 'http_code' keys or false on failure
+ */
+function vms_curl_post($url, $data = [], $timeout = 30) {
+    $ch = curl_init();
+    $is_dev_mode = get_option('vms_dev_mode', 0);
+    
+    $curl_options = [
+        CURLOPT_URL => $url,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => http_build_query($data),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_USERAGENT => 'verstka wordpress 1.2',
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 3,
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/x-www-form-urlencoded'
+        ],
+    ];
+    
+    // Отключаем SSL проверку только в dev режиме
+    if ($is_dev_mode) {
+        $curl_options[CURLOPT_SSL_VERIFYPEER] = false;
+        $curl_options[CURLOPT_SSL_VERIFYHOST] = false;
+    }
+    
+    curl_setopt_array($ch, $curl_options);
+    
+    $body = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+    
+    if ($body === false || !empty($error)) {
+        return false;
+    }
+    
+    return [
+        'body' => $body,
+        'http_code' => $http_code
+    ];
+}
+
+/**
+ * cURL file download wrapper
+ *
+ * @param string $url The URL to download from
+ * @param string $file_path Local file path to save to
+ * @param int $timeout Timeout in seconds
+ * @return array|false Response array with 'http_code' key or false on failure
+ */
+function vms_curl_download($url, $file_path, $timeout = 60) {
+    $ch = curl_init();
+    $fp = fopen($file_path, 'w+');
+    $is_dev_mode = get_option('vms_dev_mode', 0);
+    
+    if (!$fp) {
+        return false;
+    }
+    
+    $curl_options = [
+        CURLOPT_URL => $url,
+        CURLOPT_FILE => $fp,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_USERAGENT => 'verstka wordpress 1.2',
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 3,
+    ];
+    
+    // Отключаем SSL проверку только в dev режиме
+    if ($is_dev_mode) {
+        $curl_options[CURLOPT_SSL_VERIFYPEER] = false;
+        $curl_options[CURLOPT_SSL_VERIFYHOST] = false;
+    }
+    
+    curl_setopt_array($ch, $curl_options);
+    
+    $result = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    
+    curl_close($ch);
+    fclose($fp);
+    
+    if ($result === false || !empty($error) || $http_code !== 200) {
+        unlink($file_path); // Remove incomplete file
+        return false;
+    }
+    
+    return [
+        'http_code' => $http_code,
+        'file_path' => $file_path
+    ];
+}
+
+/**
+ * Multi-threaded cURL file download wrapper
+ *
+ * @param array $downloads Array of downloads with 'url', 'path', 'filename' keys
+ * @param int $timeout Timeout in seconds
+ * @param int $max_concurrent Maximum concurrent connections (default: 20)
+ * @return array Array of results with success status and details
+ */
+function vms_curl_download_multiple($downloads, $timeout = 60, $max_concurrent = 20) {
+    if (empty($downloads)) {
+        return [];
+    }
+    
+    $is_dev_mode = get_option('vms_dev_mode', 0);
+    $all_results = [];
+    
+    // Process downloads in batches of max_concurrent
+    $download_batches = array_chunk($downloads, $max_concurrent, true);
+    $batch_count = count($download_batches);
+    
+    foreach ($download_batches as $batch_index => $batch) {
+        if ($is_dev_mode) {
+            error_log(sprintf('VMS: Processing batch %d/%d with %d files', 
+                $batch_index + 1, $batch_count, count($batch)));
+        }
+        
+        $batch_results = vms_curl_download_batch($batch, $timeout, $is_dev_mode);
+        $all_results = array_merge($all_results, $batch_results);
+        
+        if ($is_dev_mode) {
+            $batch_stats = vms_get_download_stats($batch_results);
+            error_log(sprintf('VMS: Batch %d/%d completed - Success: %d, Failed: %d, Size: %s MB', 
+                $batch_index + 1, $batch_count, 
+                $batch_stats['successful'], $batch_stats['failed'], 
+                $batch_stats['total_size_mb']));
+        }
+    }
+    
+    return $all_results;
+}
+
+/**
+ * Process a single batch of downloads
+ *
+ * @param array $downloads Batch of downloads to process
+ * @param int $timeout Timeout in seconds
+ * @param bool $is_dev_mode Development mode flag
+ * @return array Array of results for this batch
+ */
+function vms_curl_download_batch($downloads, $timeout, $is_dev_mode) {
+    $multi_handle = curl_multi_init();
+    $curl_handles = [];
+    $file_handles = [];
+    $results = [];
+    
+    // Set maximum concurrent connections
+    curl_multi_setopt($multi_handle, CURLMOPT_MAXCONNECTS, count($downloads));
+    
+    // Initialize all cURL handles for this batch
+    foreach ($downloads as $index => $download) {
+        $ch = curl_init();
+        $fp = fopen($download['path'], 'w+');
+        
+        if (!$fp) {
+            $results[$index] = [
+                'success' => false,
+                'url' => $download['url'],
+                'path' => $download['path'],
+                'filename' => $download['filename'],
+                'error' => 'Failed to open file for writing: ' . $download['path']
+            ];
+            continue;
+        }
+        
+        $curl_options = [
+            CURLOPT_URL => $download['url'],
+            CURLOPT_FILE => $fp,
+            CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_USERAGENT => 'verstka wordpress 1.2',
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 3,
+        ];
+        
+        // Отключаем SSL проверку только в dev режиме
+        if ($is_dev_mode) {
+            $curl_options[CURLOPT_SSL_VERIFYPEER] = false;
+            $curl_options[CURLOPT_SSL_VERIFYHOST] = false;
+        }
+        
+        curl_setopt_array($ch, $curl_options);
+        curl_multi_add_handle($multi_handle, $ch);
+        
+        $curl_handles[$index] = $ch;
+        $file_handles[$index] = $fp;
+    }
+    
+    // Execute all handles
+    $running = null;
+    do {
+        curl_multi_exec($multi_handle, $running);
+        curl_multi_select($multi_handle);
+    } while ($running > 0);
+    
+    // Collect results
+    foreach ($curl_handles as $index => $ch) {
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        $download = $downloads[$index];
+        
+        curl_multi_remove_handle($multi_handle, $ch);
+        curl_close($ch);
+        fclose($file_handles[$index]);
+        
+        if (!empty($error) || $http_code !== 200) {
+            // Remove incomplete file
+            if (file_exists($download['path'])) {
+                unlink($download['path']);
+            }
+            
+            $results[$index] = [
+                'success' => false,
+                'url' => $download['url'],
+                'path' => $download['path'],
+                'filename' => $download['filename'],
+                'http_code' => $http_code,
+                'error' => !empty($error) ? $error : "HTTP error: $http_code"
+            ];
+        } else {
+            $results[$index] = [
+                'success' => true,
+                'url' => $download['url'],
+                'path' => $download['path'],
+                'filename' => $download['filename'],
+                'http_code' => $http_code,
+                'file_size' => filesize($download['path'])
+            ];
+        }
+    }
+    
+    curl_multi_close($multi_handle);
+    
+    return $results;
+}
+
+/**
+ * Get statistics for multi-threaded downloads
+ *
+ * @param array $results Results from vms_curl_download_multiple
+ * @return array Statistics summary
+ */
+function vms_get_download_stats($results) {
+    $total = count($results);
+    $successful = array_filter($results, function($r) { return $r['success']; });
+    $failed = array_filter($results, function($r) { return !$r['success']; });
+    
+    $total_size = array_sum(array_column($successful, 'file_size'));
+    
+    return [
+        'total_files' => $total,
+        'successful' => count($successful),
+        'failed' => count($failed),
+        'total_size_bytes' => $total_size,
+        'total_size_mb' => round($total_size / 1024 / 1024, 2),
+        'success_rate' => $total > 0 ? round((count($successful) / $total) * 100, 1) : 0
+    ];
 }
