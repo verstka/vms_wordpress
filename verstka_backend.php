@@ -1114,6 +1114,7 @@ add_filter('the_content', 'apply_vms_content_after', 9999);
 function apply_vms_content_after($content)
 {
     $post = get_post();
+    $post_id = $post ? $post->ID : 0;
 
 	if ($post->post_isvms != 1) { // it's not an Verstka article
         return $content;
@@ -1128,29 +1129,27 @@ function apply_vms_content_after($content)
     $desktop = base64_encode($post->post_vms_content);
     $mobile = base64_encode($mobile);
 	
-    $content = "<div class=\"verstka-article\">{$post->post_vms_content}</div>
+    $content = "<div class=\"verstka-article-{$post_id}\">{$post->post_vms_content}</div>
 		<script type=\"text/javascript\" id=\"verstka-init\">
 		window.onVMSAPIReady = function (api) {
 			api.Article.enable({
 				display_mode: 'desktop'
 			});
-
-			document.querySelectorAll('article')[0].classList.add('shown');
 		};
 
 		function decodeHtml(base64) {
 		    return decodeURIComponent(atob(base64).split('').map(function(c) {return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);}).join(''))
         }
 
-		var htmls = {
+		var htmls_{$post_id} = {
 			desktop: decodeHtml(`{$desktop}`),
 			mobile: decodeHtml(`{$mobile}`),
 		};
 		var isMobile = false;
 		var prev = null;
 
-		function switchHtml(html) {
-			var article = document.querySelector('.verstka-article')
+		function switchHtml_{$post_id}(html) {
+			var article = document.querySelector('.verstka-article-{$post_id}')
 
 			if (window.VMS_API) {
 				window.VMS_API.Article.disable()
@@ -1163,20 +1162,20 @@ function apply_vms_content_after($content)
 			}
 		}
 
-		function onResize() {
+		function onResize_{$post_id}() {
 			var w = document.documentElement.clientWidth;
 
 			isMobile = w < 768;
 
 			if (prev !== isMobile) {
 				prev = isMobile
-				switchHtml(htmls[isMobile ? 'mobile' : 'desktop'])
+				switchHtml_{$post_id}(htmls_{$post_id}[isMobile ? 'mobile' : 'desktop'])
 			}
 		}
 
-		onResize()
+		onResize_{$post_id}()
 
-		window.onresize = onResize;
+		window.addEventListener('resize', onResize_{$post_id});
 
 	</script>";
 
