@@ -3,7 +3,7 @@
 Plugin Name: Verstka Backend
 Plugin URI: https://github.com/verstka/vms_wordpress
 Description: Powerfull design tool & WYSIWYG api on Backend.
-Version: 1.2.1
+Version: 1.2.2
 Author: Verstka
 Author URI: https://verstka.io
 Text Domain: verstka-backend
@@ -109,7 +109,7 @@ function vms_rest_api_notice() {
  * Enqueue front-end scripts and styles
  */
 function vms_enqueue_assets() {
-    $version = '1.2.1';
+    $version = '1.2.2';
     wp_enqueue_script('vms-script', plugin_dir_url(__FILE__) . 'assets/js/vms_plugin.js', array('jquery'), $version, true);
 }
 add_action('wp_enqueue_scripts', 'vms_enqueue_assets');
@@ -150,7 +150,7 @@ function vms_test_endpoint( WP_REST_Request $request ) {
     return rest_ensure_response(array(
         'status' => 'success',
         'message' => 'Verstka REST API is working',
-        'version' => '1.2.1',
+        'version' => '1.2.2',
         'php_version' => phpversion(),
         'wordpress_version' => get_bloginfo('version'),
         'rest_url' => rest_url('verstka/v1/'),
@@ -357,7 +357,7 @@ function vms_verstka_callback( WP_REST_Request $request ) {
         return formJSON(0, sprintf('File list HTTP error: %d', $list_res['http_code']));
     }
     $list_data = json_decode($list_res['body'], true);
-    if (empty($list_data['data']) || !is_array($list_data['data'])) {
+    if (!isset($list_data['data'])) {
         return formJSON(0, 'Invalid file list JSON', $list_data);
     }
     $images_list = $list_data['data'];
@@ -782,7 +782,7 @@ function vms_save_settings_callback() {
  * @param string $hook The current admin page.
  */
 function vms_enqueue_admin_assets($hook) {
-    $version = '1.2.1';
+    $version = '1.2.2';
     
     // Подключаем CSS для всех админ страниц
     wp_enqueue_style('vms-admin-style', plugin_dir_url(__FILE__) . 'assets/css/vms_admin.css', array(), $version);
@@ -1050,7 +1050,7 @@ function vms_enqueue_block_editor_buttons() {
         'vms-block-editor',
         plugin_dir_url(__FILE__) . 'assets/js/vms_block_editor.js',
         array('wp-plugins', 'wp-edit-post', 'wp-components', 'wp-element', 'wp-i18n'),
-        '1.2.1',
+        '1.2.2',
         true
     );
     wp_localize_script(
