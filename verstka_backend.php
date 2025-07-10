@@ -3,7 +3,7 @@
 Plugin Name: Verstka Backend
 Plugin URI: https://github.com/verstka/vms_wordpress
 Description: Powerfull design tool & WYSIWYG api on Backend.
-Version: 1.2.2
+Version: 1.2.3
 Author: Verstka
 Author URI: https://verstka.io
 Text Domain: verstka-backend
@@ -109,7 +109,7 @@ function vms_rest_api_notice() {
  * Enqueue front-end scripts and styles
  */
 function vms_enqueue_assets() {
-    $version = '1.2.2';
+    $version = '1.2.3';
     wp_enqueue_script('vms-script', plugin_dir_url(__FILE__) . 'assets/js/vms_plugin.js', array('jquery'), $version, true);
 }
 add_action('wp_enqueue_scripts', 'vms_enqueue_assets');
@@ -150,7 +150,7 @@ function vms_test_endpoint( WP_REST_Request $request ) {
     return rest_ensure_response(array(
         'status' => 'success',
         'message' => 'Verstka REST API is working',
-        'version' => '1.2.2',
+        'version' => '1.2.3',
         'php_version' => phpversion(),
         'wordpress_version' => get_bloginfo('version'),
         'rest_url' => rest_url('verstka/v1/'),
@@ -782,7 +782,7 @@ function vms_save_settings_callback() {
  * @param string $hook The current admin page.
  */
 function vms_enqueue_admin_assets($hook) {
-    $version = '1.2.2';
+    $version = '1.2.3';
     
     // Подключаем CSS для всех админ страниц
     wp_enqueue_style('vms-admin-style', plugin_dir_url(__FILE__) . 'assets/css/vms_admin.css', array(), $version);
@@ -1050,7 +1050,7 @@ function vms_enqueue_block_editor_buttons() {
         'vms-block-editor',
         plugin_dir_url(__FILE__) . 'assets/js/vms_block_editor.js',
         array('wp-plugins', 'wp-edit-post', 'wp-components', 'wp-element', 'wp-i18n'),
-        '1.2.2',
+        '1.2.3',
         true
     );
     wp_localize_script(
@@ -1086,14 +1086,18 @@ function vms_add_classic_editor_buttons($editor_id) {
 }
 
 // Enqueue Verstka API script for front-end articles
-add_action('wp_enqueue_scripts', 'vms_enqueue_frontend_script');
-function vms_enqueue_frontend_script() {
-    if (is_singular('post')) {
-        $post = get_queried_object();
-        if (!empty($post->post_isvms)) {
-            wp_enqueue_script('verstka-api', 'https://go.verstka.org/api.js', [], null, true);
-        }
-    }
+// add_action('wp_enqueue_scripts', 'vms_enqueue_frontend_script');
+// function vms_enqueue_frontend_script() {
+//     wp_enqueue_script('verstka-api', 'https://go.verstka.org/api.js', [], null, true);
+// }
+
+// Enqueue Verstka API script for front-end articles
+add_action('wp_head', 'add_this_script_footer');
+function add_this_script_footer()
+{
+    ?>
+    <script src="https://go.verstka.org/api.js" async type="text/javascript"></script>
+    <?php
 }
 
 // Add meta viewport tag for Verstka articles
