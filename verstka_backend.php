@@ -1091,9 +1091,18 @@ function vms_add_classic_editor_buttons($editor_id) {
 //     wp_enqueue_script('verstka-api', 'https://go.verstka.org/api.js', [], null, true);
 // }
 
-// Enqueue Verstka API script for front-end articles
-add_action('wp_head', 'add_this_script_footer');
-function add_this_script_footer()
+// Enqueue Verstka critical CSS with high priority
+add_action('wp_head', 'vms_enqueue_critical_css', 1);
+function vms_enqueue_critical_css()
+{
+    ?>
+    <link rel="stylesheet" href="https://go.verstka.org/critical.css" type="text/css" media="all">
+    <?php
+}
+
+// Enqueue Verstka API script with low priority
+add_action('wp_head', 'vms_enqueue_api_script');
+function vms_enqueue_api_script()
 {
     ?>
     <script src="https://go.verstka.org/api.js" async type="text/javascript"></script>
