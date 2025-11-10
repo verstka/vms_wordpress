@@ -3,7 +3,7 @@
 Plugin Name: Verstka Backend
 Plugin URI: https://github.com/verstka/vms_wordpress
 Description: Powerfull design tool & WYSIWYG api on Backend.
-Version: 1.2.4
+Version: 1.2.5
 Author: Verstka
 Author URI: https://verstka.io
 Text Domain: verstka-backend
@@ -109,7 +109,7 @@ function vms_rest_api_notice() {
  * Enqueue front-end scripts and styles
  */
 function vms_enqueue_assets() {
-    $version = '1.2.4';
+    $version = '1.2.5';
     wp_enqueue_script('vms-script', plugin_dir_url(__FILE__) . 'assets/js/vms_plugin.js', array('jquery'), $version, true);
 }
 add_action('wp_enqueue_scripts', 'vms_enqueue_assets');
@@ -150,7 +150,7 @@ function vms_test_endpoint( WP_REST_Request $request ) {
     return rest_ensure_response(array(
         'status' => 'success',
         'message' => 'Verstka REST API is working',
-        'version' => '1.2.4',
+        'version' => '1.2.5',
         'php_version' => phpversion(),
         'wordpress_version' => get_bloginfo('version'),
         'rest_url' => rest_url('verstka/v1/'),
@@ -608,6 +608,10 @@ function vms_render_settings_page() {
                     <th><?php _e('Fonts CSS URL', 'verstka-backend'); ?></th>
                     <td><input type="text" name="vms_fonts_css_url" value="<?php echo esc_attr(get_option('vms_fonts_css_url') ?: ''); ?>" class="regular-text" placeholder="/vms_fonts.css" /></td>
                 </tr>
+                <tr>
+                    <th><?php _e('Observe Selector', 'verstka-backend'); ?></th>
+                    <td><input type="text" name="vms_observe_selector" value="<?php echo esc_attr(get_option('vms_observe_selector') ?: ''); ?>" class="regular-text" placeholder=".banner" /></td>
+                </tr>
             </table>
             <input type="hidden" name="action" value="vms_save_settings">
             <?php submit_button(__('Save Settings', 'verstka-backend')); ?>
@@ -769,9 +773,11 @@ function vms_save_settings_callback() {
     $desktop = sanitize_text_field($_POST['vms_desktop_width'] ?? '');
     $mobile  = sanitize_text_field($_POST['vms_mobile_width']  ?? '');
     $fonts_css_url = sanitize_text_field($_POST['vms_fonts_css_url'] ?? '');
+    $observe_selector = sanitize_text_field($_POST['vms_observe_selector'] ?? '');
     update_option('vms_desktop_width', $desktop);
     update_option('vms_mobile_width', $mobile);
     update_option('vms_fonts_css_url', $fonts_css_url);
+    update_option('vms_observe_selector', $observe_selector);
     wp_redirect(admin_url('options-general.php?page=verstka-backend-settings'));
     exit;
 }
@@ -782,7 +788,7 @@ function vms_save_settings_callback() {
  * @param string $hook The current admin page.
  */
 function vms_enqueue_admin_assets($hook) {
-    $version = '1.2.4';
+    $version = '1.2.5';
     
     // Подключаем CSS для всех админ страниц
     wp_enqueue_style('vms-admin-style', plugin_dir_url(__FILE__) . 'assets/css/vms_admin.css', array(), $version);
@@ -1050,7 +1056,7 @@ function vms_enqueue_block_editor_buttons() {
         'vms-block-editor',
         plugin_dir_url(__FILE__) . 'assets/js/vms_block_editor.js',
         array('wp-plugins', 'wp-edit-post', 'wp-components', 'wp-element', 'wp-i18n'),
-        '1.2.4',
+        '1.2.5',
         true
     );
     wp_localize_script(
@@ -1142,12 +1148,17 @@ function apply_vms_content_after($content)
     $desktop = base64_encode($post->post_vms_content);
     $mobile = base64_encode($mobile);
 	
+    // Get observe_selector from settings
+    $observe_selector = get_option('vms_observe_selector', '');
+    $observe_selector_line = !empty($observe_selector) ? ",\n\t\t\t\tobserve_selector: '{$observe_selector}'" : '';
+    
     $content = "<div class=\"verstka-article-{$post_id}\">{$post->post_vms_content}</div>
 		<script type=\"text/javascript\" id=\"verstka-init\">
 		window.onVMSAPIReady = function (api) {
 			api.Article.enable({
-				display_mode: 'desktop'
+				display_mode: 'desktop'{$observe_selector_line}
 			});
+
 		};
 
 		function decodeHtml(base64) {
