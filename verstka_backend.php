@@ -608,6 +608,10 @@ function vms_render_settings_page() {
                     <th><?php _e('Fonts CSS URL', 'verstka-backend'); ?></th>
                     <td><input type="text" name="vms_fonts_css_url" value="<?php echo esc_attr(get_option('vms_fonts_css_url') ?: ''); ?>" class="regular-text" placeholder="/vms_fonts.css" /></td>
                 </tr>
+                <tr>
+                    <th><?php _e('Observe Selector', 'verstka-backend'); ?></th>
+                    <td><input type="text" name="vms_observe_selector" value="<?php echo esc_attr(get_option('vms_observe_selector') ?: ''); ?>" class="regular-text" placeholder=".banner" /></td>
+                </tr>
             </table>
             <input type="hidden" name="action" value="vms_save_settings">
             <?php submit_button(__('Save Settings', 'verstka-backend')); ?>
@@ -769,9 +773,11 @@ function vms_save_settings_callback() {
     $desktop = sanitize_text_field($_POST['vms_desktop_width'] ?? '');
     $mobile  = sanitize_text_field($_POST['vms_mobile_width']  ?? '');
     $fonts_css_url = sanitize_text_field($_POST['vms_fonts_css_url'] ?? '');
+    $observe_selector = sanitize_text_field($_POST['vms_observe_selector'] ?? '');
     update_option('vms_desktop_width', $desktop);
     update_option('vms_mobile_width', $mobile);
     update_option('vms_fonts_css_url', $fonts_css_url);
+    update_option('vms_observe_selector', $observe_selector);
     wp_redirect(admin_url('options-general.php?page=verstka-backend-settings'));
     exit;
 }
@@ -1142,12 +1148,17 @@ function apply_vms_content_after($content)
     $desktop = base64_encode($post->post_vms_content);
     $mobile = base64_encode($mobile);
 	
+    // Get observe_selector from settings
+    $observe_selector = get_option('vms_observe_selector', '');
+    $observe_selector_line = !empty($observe_selector) ? ",\n\t\t\t\tobserve_selector: '{$observe_selector}'" : '';
+    
     $content = "<div class=\"verstka-article-{$post_id}\">{$post->post_vms_content}</div>
 		<script type=\"text/javascript\" id=\"verstka-init\">
 		window.onVMSAPIReady = function (api) {
 			api.Article.enable({
-				display_mode: 'desktop'
+				display_mode: 'desktop'{$observe_selector_line}
 			});
+
 		};
 
 		function decodeHtml(base64) {
